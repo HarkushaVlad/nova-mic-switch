@@ -1,0 +1,31 @@
+# Python bytecode and generated metadata
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Local Python environments and package caches
+.venv/
+.venv.*/
+venv/
+.uv-cache/
+
+# Local profiles, sensitive environment files, and diagnostic captures
+.dev-profile/
+captures/
+logs/
+*.log
+.env
+.env.*
+!.env.example
+
+# Build outputs
+/build/
+/dist/
+
+# Operating-system files
+.DS_Store
+Thumbs.db
+Desktop.ini

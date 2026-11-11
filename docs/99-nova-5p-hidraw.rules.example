@@ -1,0 +1,7 @@
+# Documentation only. Do not install without explicit review and manual approval.
+# Narrowly grant the logged-in desktop user access via systemd-logind uaccess.
+SUBSYSTEM=="hidraw", ATTRS{idVendor}=="1038", ATTRS{idProduct}=="2232", TAG+="uaccess"
+
+# This file is intentionally not installed or activated by the project. Rule
+# ordering, session state, replug/relogin requirements, and distribution policy
+# vary. Do not broaden this to MODE="0666" or the input group.

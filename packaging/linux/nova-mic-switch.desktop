@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Nova Mic Switch
+Comment=Switch between configured microphones with the headset button
+Exec=AppRun
+Icon=nova-mic-switch
+Terminal=false
+Categories=Utility;

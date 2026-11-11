@@ -1,0 +1,291 @@
+name: Build release artifacts
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Create a GitHub draft release after both platform builds pass
+        type: boolean
+        required: true
+        default: false
+      tag:
+        description: Existing vVERSION tag pointing to this workflow's commit (required to publish)
+        type: string
+        required: false
+        default: ''
+      license_reviewed:
+        description: Confirm third-party notices and real-platform test review is complete
+        type: boolean
+        required: true
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  validate-inputs:
+    name: Validate manual release request
+    runs-on: ubuntu-22.04
+    outputs:
+      version: ${{ steps.validate.outputs.version }}
+    steps:
+      - name: Checkout complete history and tags
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.13'
+      - name: Validate publish gates and resolve project version
+        id: validate
+        env:
+          PUBLISH_INPUT: ${{ inputs.publish }}
+          RELEASE_TAG_INPUT: ${{ inputs.tag }}
+          LICENSE_REVIEWED_INPUT: ${{ inputs.license_reviewed }}
+          WORKFLOW_COMMIT: ${{ github.sha }}
+        shell: bash
+        run: |
+          python - <<'PY'
+          import os, re, subprocess, tomllib
+          with open("pyproject.toml", "rb") as project:
+              version = tomllib.load(project)["project"]["version"]
+          if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+(?:[-+][A-Za-z0-9.-]+)?", version):
+              raise SystemExit(f"Unsafe project version: {version!r}")
+          if os.environ.get("PUBLISH_INPUT", "").lower() == "true":
+              tag = os.environ.get("RELEASE_TAG_INPUT", "")
+              expected = f"v{version}"
+              if os.environ.get("LICENSE_REVIEWED_INPUT", "").lower() != "true":
+                  raise SystemExit("Publishing requires explicit license/notice and real-platform test review acknowledgement.")
+              if not re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+(?:[-+][A-Za-z0-9.-]+)?", tag) or tag != expected:
+                  raise SystemExit(f"Publishing requires an existing tag exactly matching {expected}.")
+              result = subprocess.run(
+                  ["git", "rev-parse", "--verify", f"refs/tags/{tag}^{{commit}}"],
+                  check=False, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
+              )
+              if result.returncode != 0:
+                  raise SystemExit(f"Required release tag does not exist in the checkout: {tag}")
+              if result.stdout.strip() != os.environ["WORKFLOW_COMMIT"]:
+                  raise SystemExit("The release tag must point to this workflow-dispatch commit.")
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write(f"version={version}\n")
+          PY
+
+  linux-x86_64:
+    name: Build Linux x86_64 AppImage
+    runs-on: ubuntu-22.04
+    needs: [validate-inputs]
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.13'
+      - name: Set up uv
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: 0.13.7
+          enable-cache: false
+      - name: Prepare project-local build caches
+        shell: bash
+        run: |
+          mkdir -p build/release-tools build/pyinstaller-cache .uv-cache
+          echo "UV_CACHE_DIR=$GITHUB_WORKSPACE/.uv-cache" >> "$GITHUB_ENV"
+          echo "PYINSTALLER_CONFIG_DIR=$GITHUB_WORKSPACE/build/pyinstaller-cache" >> "$GITHUB_ENV"
+          echo "QT_QPA_PLATFORM=offscreen" >> "$GITHUB_ENV"
+      - name: Sync locked Python 3.13 environment
+        run: uv sync --python 3.13 --locked --group dev
+      - name: Run unit tests
+        run: uv run --python 3.13 --locked --group dev python -m unittest discover -s tests -v
+      - name: Collect bundled third-party license notices
+        run: uv run --python 3.13 --locked --group dev python scripts/collect_licenses.py --fetch-python-license
+      - name: Download pinned AppImage tools
+        run: |
+          uv run --python 3.13 --locked --group dev python scripts/release_tools.py --tool appimagetool --output-dir build/release-tools
+          uv run --python 3.13 --locked --group dev python scripts/release_tools.py --tool appimage-runtime --output-dir build/release-tools
+      - name: Build Linux onedir bundle and AppImage
+        shell: bash
+        run: |
+          scripts/build_linux.sh
+          VERSION="$(uv run --python 3.13 --locked --group dev python -c 'import tomllib; print(tomllib.loads(open("pyproject.toml", "rb").read().decode())["project"]["version"])')"
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([+-][A-Za-z0-9.-]+)?$ ]]; then
+            echo "Unsafe project version: $VERSION" >&2
+            exit 2
+          fi
+          scripts/build_appimage.sh --appimagetool "$GITHUB_WORKSPACE/build/release-tools/appimagetool-x86_64.AppImage" --runtime-file "$GITHUB_WORKSPACE/build/release-tools/runtime-x86_64"
+          APPIMAGE="dist/linux/NovaMicSwitch-$VERSION-x86_64.AppImage"
+          if [[ ! -f "$APPIMAGE" ]]; then echo "AppImage output missing: $APPIMAGE" >&2; exit 1; fi
+          LICENSES="dist/linux/NovaMicSwitch/_internal/licenses"
+          for path in manifest.json THIRD-PARTY-NOTICES.md Python-LICENSE.txt qt-6.12.0/LGPL-3.0-only.txt ffmpeg-9.0.1/qt_attribution.json ffmpeg-9.0.1/LICENSE.LGPL-2.1-or-later.txt; do
+            test -s "$LICENSES/$path" || { echo "Frozen Linux license payload missing: $LICENSES/$path" >&2; exit 1; }
+          done
+          FORBIDDEN="$(find dist/linux/NovaMicSwitch \( -iname '*virtualkeyboard*' -o -iname '*libqt6pdf*' -o -iname 'qpdf.dll' -o -iname 'libqpdf.so' \) -print -quit)"
+          if [[ -n "$FORBIDDEN" ]]; then
+            echo 'Frozen Linux bundle unexpectedly contains an excluded Qt Virtual Keyboard/PDF component.' >&2
+            exit 1
+          fi
+          SMOKE_CONFIG="$GITHUB_WORKSPACE/build/linux-appimage-smoke"
+          mkdir -p "$SMOKE_CONFIG"
+          test ! -e "$SMOKE_CONFIG/settings.json" || { echo 'Linux smoke config unexpectedly already has settings.json' >&2; exit 1; }
+          timeout 60s env QT_QPA_PLATFORM=offscreen APPIMAGE_EXTRACT_AND_RUN=1 "$APPIMAGE" --safe-mode --config-dir "$SMOKE_CONFIG" --smoke-test
+          test ! -e "$SMOKE_CONFIG/settings.json" || { echo 'Safe-mode AppImage smoke test created settings.json' >&2; exit 1; }
+          mkdir -p dist/release/linux-x86_64
+          cp "$APPIMAGE" dist/release/linux-x86_64/
+          (cd dist/release/linux-x86_64 && sha256sum "NovaMicSwitch-$VERSION-x86_64.AppImage" > SHA256SUMS && cp SHA256SUMS "NovaMicSwitch-$VERSION-x86_64.AppImage.sha256")
+      - name: Upload Linux release artifact
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: linux-x86_64
+          path: dist/release/linux-x86_64/*
+          if-no-files-found: error
+
+  windows-x64:
+    name: Build Windows x64 installer
+    runs-on: windows-latest
+    needs: [validate-inputs]
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.13'
+      - name: Set up uv
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: 0.13.7
+          enable-cache: false
+      - name: Prepare project-local build caches
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path build\release-tools, build\pyinstaller-cache, .uv-cache | Out-Null
+          "UV_CACHE_DIR=$env:GITHUB_WORKSPACE\.uv-cache" >> $env:GITHUB_ENV
+          "PYINSTALLER_CONFIG_DIR=$env:GITHUB_WORKSPACE\build\pyinstaller-cache" >> $env:GITHUB_ENV
+          "QT_QPA_PLATFORM=offscreen" >> $env:GITHUB_ENV
+      - name: Sync locked Python 3.13 environment
+        run: uv sync --python 3.13 --locked --group dev
+      - name: Run unit tests
+        run: uv run --python 3.13 --locked --group dev python -m unittest discover -s tests -v
+        env:
+          QT_QPA_PLATFORM: offscreen
+      - name: Collect bundled third-party license notices
+        run: .\.venv\Scripts\python.exe scripts\collect_licenses.py --fetch-python-license
+      - name: Download and install pinned Inno Setup
+        shell: pwsh
+        run: |
+          $Installer = & .\.venv\Scripts\python.exe scripts\release_tools.py --tool inno-setup --output-dir build\release-tools
+          if ($LASTEXITCODE -ne 0) { throw "Pinned Inno Setup download failed with exit code $LASTEXITCODE" }
+          $InstallDir = Join-Path $env:GITHUB_WORKSPACE 'build\inno-setup'
+          $QuotedInstallDir = '"' + $InstallDir.Replace('"', '\"') + '"'
+          $Process = Start-Process -FilePath $Installer -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-', "/DIR=$QuotedInstallDir") -Wait -PassThru
+          if ($Process.ExitCode -ne 0) { throw "Inno Setup installer failed with exit code $($Process.ExitCode)" }
+          $Compiler = Join-Path $InstallDir 'ISCC.exe'
+          if (-not (Test-Path -LiteralPath $Compiler -PathType Leaf)) { throw "ISCC.exe missing after verified Inno Setup install: $Compiler" }
+          "INNO_SETUP_COMPILER=$Compiler" >> $env:GITHUB_ENV
+      - name: Build Windows onedir bundle and installer
+        shell: pwsh
+        run: .\scripts\build_windows.ps1 -InnoSetupCompiler $env:INNO_SETUP_COMPILER
+      - name: Smoke-test frozen Windows executable without opening devices
+        shell: pwsh
+        run: |
+          $SmokeConfig = Join-Path $env:GITHUB_WORKSPACE 'build\windows-frozen-smoke'
+          New-Item -ItemType Directory -Force -Path $SmokeConfig | Out-Null
+          $SettingsPath = Join-Path $SmokeConfig 'settings.json'
+          if (Test-Path -LiteralPath $SettingsPath) { throw "Smoke config unexpectedly already has settings.json: $SettingsPath" }
+          $env:QT_QPA_PLATFORM = 'offscreen'
+          $Exe = Join-Path $env:GITHUB_WORKSPACE 'dist\windows\NovaMicSwitch\NovaMicSwitch.exe'
+          $QuotedSmokeConfig = '"' + $SmokeConfig.Replace('"', '\"') + '"'
+          $Process = Start-Process -FilePath $Exe -ArgumentList @('--safe-mode', '--config-dir', $QuotedSmokeConfig, '--smoke-test') -PassThru -WindowStyle Hidden
+          if (-not $Process.WaitForExit(60000)) {
+            Stop-Process -Id $Process.Id -Force -ErrorAction SilentlyContinue
+            $Process.WaitForExit()
+            throw 'Frozen GUI smoke test exceeded 60 seconds.'
+          }
+          $Process.Refresh()
+          if ($Process.ExitCode -ne 0) { throw "Frozen GUI smoke test failed with exit code $($Process.ExitCode)" }
+          if (Test-Path -LiteralPath $SettingsPath) { throw 'Safe-mode smoke test unexpectedly created settings.json' }
+          $LicenseRoot = Join-Path $env:GITHUB_WORKSPACE 'dist\windows\NovaMicSwitch\_internal\licenses'
+          foreach ($Relative in @('manifest.json', 'THIRD-PARTY-NOTICES.md', 'Python-LICENSE.txt', 'qt-6.12.0\LGPL-3.0-only.txt', 'ffmpeg-9.0.1\qt_attribution.json', 'ffmpeg-9.0.1\LICENSE.LGPL-2.1-or-later.txt')) {
+            $LicensePath = Join-Path $LicenseRoot $Relative
+            if (-not (Test-Path -LiteralPath $LicensePath -PathType Leaf)) { throw "Frozen Windows license payload missing: $LicensePath" }
+            if ((Get-Item -LiteralPath $LicensePath).Length -le 0) { throw "Frozen Windows license payload is empty: $LicensePath" }
+          }
+          $Forbidden = Get-ChildItem -LiteralPath (Join-Path $env:GITHUB_WORKSPACE 'dist\windows\NovaMicSwitch') -File -Recurse | Where-Object { $_.FullName -match '(?i)virtualkeyboard|libqt6pdf|qpdf\.dll|libqpdf\.so' }
+          if ($Forbidden) { throw "Frozen Windows bundle unexpectedly contains excluded Qt Virtual Keyboard/PDF files: $($Forbidden.FullName -join ', ')" }
+      - name: Upload Windows release artifact
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-x64
+          path: dist/installers/*
+          if-no-files-found: error
+
+  publish-draft:
+    name: Create draft GitHub release
+    if: ${{ inputs.publish }}
+    needs: [validate-inputs, linux-x86_64, windows-x64]
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - name: Download Linux release artifact
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: linux-x86_64
+          path: release-assets/linux-x86_64
+      - name: Download Windows release artifact
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: windows-x64
+          path: release-assets/windows-x64
+      - name: Verify artifact sets and checksums
+        env:
+          RELEASE_VERSION: ${{ needs.validate-inputs.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$RELEASE_VERSION"
+          linux="NovaMicSwitch-$version-x86_64.AppImage"
+          windows="NovaMicSwitch-Setup-$version.exe"
+          test -s "release-assets/linux-x86_64/$linux"
+          test -s "release-assets/linux-x86_64/$linux.sha256"
+          test -s release-assets/linux-x86_64/SHA256SUMS
+          test -s "release-assets/windows-x64/$windows"
+          test -s "release-assets/windows-x64/$windows.sha256"
+          test -s release-assets/windows-x64/SHA256SUMS
+          (cd release-assets/linux-x86_64 && sha256sum -c SHA256SUMS)
+          (cd release-assets/linux-x86_64 && sha256sum -c "$linux.sha256")
+          cmp -s "release-assets/linux-x86_64/$linux.sha256" release-assets/linux-x86_64/SHA256SUMS
+          (cd release-assets/windows-x64 && sha256sum -c SHA256SUMS)
+          (cd release-assets/windows-x64 && sha256sum -c "$windows.sha256")
+          cmp -s "release-assets/windows-x64/$windows.sha256" release-assets/windows-x64/SHA256SUMS
+          cat release-assets/linux-x86_64/SHA256SUMS release-assets/windows-x64/SHA256SUMS > release-assets/SHA256SUMS
+          test "$(wc -l < release-assets/SHA256SUMS)" -eq 2
+          grep -F "$linux" release-assets/SHA256SUMS >/dev/null
+          grep -F "$windows" release-assets/SHA256SUMS >/dev/null
+      - name: Create a new draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_VERSION: ${{ needs.validate-inputs.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            echo "A release already exists for $RELEASE_TAG; refusing to edit or overwrite it." >&2
+            exit 1
+          fi
+          gh release create "$RELEASE_TAG" \
+            "release-assets/linux-x86_64/NovaMicSwitch-$RELEASE_VERSION-x86_64.AppImage" \
+            "release-assets/linux-x86_64/NovaMicSwitch-$RELEASE_VERSION-x86_64.AppImage.sha256" \
+            "release-assets/windows-x64/NovaMicSwitch-Setup-$RELEASE_VERSION.exe" \
+            "release-assets/windows-x64/NovaMicSwitch-Setup-$RELEASE_VERSION.exe.sha256" \
+            "release-assets/SHA256SUMS" \
+            --verify-tag --draft --title "Nova Mic Switch $RELEASE_VERSION" \
+            --notes "First release candidate. Windows GUI smoke and cross-platform unit tests passed in CI; no real Nova HID hardware or end-to-end microphone/audio routing was tested by this workflow. Review platform compatibility, permissions, and third-party notices before publishing this draft."

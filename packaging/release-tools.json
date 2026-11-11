@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "tools": {
+    "appimagetool": {
+      "url": "https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage",
+      "sha256": "e8c1169c4af66c3184d7ee110713d4be04befe671fa358e2c1591ee840553b03"
+    },
+    "inno-setup": {
+      "url": "https://github.com/jrsoftware/issrc/releases/download/is-6_7_4/innosetup-6.7.4.exe",
+      "sha256": "a549929319f9120716677c685535ca4671e4b937b5fdc87e2585f32d8eb30e8c"
+    },
+    "appimage-runtime": {
+      "url": "https://github.com/AppImage/type2-runtime/releases/download/20251108/runtime-x86_64",
+      "sha256": "2fca8b443c92510f1483a883f60061ad09b46b978b2631c807cd873a47ec260d",
+      "size_bytes": 944632,
+      "source_commit": "dd6cebedcbddde9c82f89b011e8e1d40b6e43868"
+    }
+  }
+}

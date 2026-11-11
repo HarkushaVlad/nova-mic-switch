@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "version": "9.0.1",
+  "licenses": [
+    {
+      "filename": "qt_attribution.json",
+      "version": "9.0.1",
+      "source_url": "https://raw.githubusercontent.com/qt/qtmultimedia/v6.12.0/src/3rdparty/ffmpeg/qt_attribution.json",
+      "sha256": "2bdb408769da5d17d298e95aac00bd5c373cc66ee9216eebc8936362bce666f4"
+    },
+    {
+      "filename": "LICENSE.LGPL-2.1-or-later.txt",
+      "version": "9.0.1",
+      "source_url": "https://raw.githubusercontent.com/qt/qtmultimedia/v6.12.0/src/3rdparty/ffmpeg/LICENSE.LGPL-2.1-or-later.txt",
+      "sha256": "1ccf09bf2f598308df4bed9cd8e9657dc5cd0973d2800318f2e241486e2edf3f"
+    },
+    {
+      "filename": "LICENSE.BSD-2-Clause.txt",
+      "version": "9.0.1",
+      "source_url": "https://raw.githubusercontent.com/qt/qtmultimedia/v6.12.0/src/3rdparty/ffmpeg/LICENSE.BSD-2-Clause.txt",
+      "sha256": "f32fb3b417a194167cfad068223fc975ba96c5960513a10f66a3c28720aec1df"
+    },
+    {
+      "filename": "LICENSE.BSD-Source-Code.txt",
+      "version": "9.0.1",
+      "source_url": "https://raw.githubusercontent.com/qt/qtmultimedia/v6.12.0/src/3rdparty/ffmpeg/LICENSE.BSD-Source-Code.txt",
+      "sha256": "1f1b677d26ab73e159a55c3a914cf12d888e18a9d0d469fedab4aa6e5a48b1c0"
+    },
+    {
+      "filename": "LICENSE.BSL-1.0.txt",
+      "version": "9.0.1",
+      "source_url": "https://raw.githubusercontent.com/qt/qtmultimedia/v6.12.0/src/3rdparty/ffmpeg/LICENSE.BSL-1.0.txt",
+      "sha256": "84c6ef3ea9e3254a54d0acf5d3e0c61ae011b8fef7dd6940591cf060e6380a8f"
+    },
+    {
+      "filename": "LICENSE.IJG.txt",
+      "version": "9.0.1",
+      "source_url": "https://raw.githubusercontent.com/qt/qtmultimedia/v6.12.0/src/3rdparty/ffmpeg/LICENSE.IJG.txt",
+      "sha256": "7658542977bfdced9e1059a6c934ce4281de76d103b831007b825917dc62511a"
+    },
+    {
+      "filename": "LICENSE.ISC.txt",
+      "version": "9.0.1",
+      "source_url": "https://raw.githubusercontent.com/qt/qtmultimedia/v6.12.0/src/3rdparty/ffmpeg/LICENSE.ISC.txt",
+      "sha256": "f2ec607f67bb0dd3053b49835b02110d5cd0f8eb6da3aac4dc0b142a6b299be9"
+    },
+    {
+      "filename": "LICENSE.MIT.txt",
+      "version": "9.0.1",
+      "source_url": "https://raw.githubusercontent.com/qt/qtmultimedia/v6.12.0/src/3rdparty/ffmpeg/LICENSE.MIT.txt",
+      "sha256": "b85dcd3e453d05982552c52b5fc9e0bdd6d23c6f8e844b984a88af32570b0cc0"
+    },
+    {
+      "filename": "LICENSE.Zlib.txt",
+      "version": "9.0.1",
+      "source_url": "https://raw.githubusercontent.com/qt/qtmultimedia/v6.12.0/src/3rdparty/ffmpeg/LICENSE.Zlib.txt",
+      "sha256": "bfb1112d49db5b1daecdfef24bd7e2f3ea0bafb33aa67aa0ab51e2bf8407c03d"
+    }
+  ]
+}
