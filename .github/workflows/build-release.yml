@@ -180,6 +180,64 @@ jobs:
           for path in manifest.json THIRD-PARTY-NOTICES.md Python-LICENSE.txt qt-6.12.0/LGPL-3.0-only.txt ffmpeg-9.0.1/qt_attribution.json ffmpeg-9.0.1/LICENSE.LGPL-2.1-or-later.txt; do
             test -s "$LICENSES/$path" || { echo "Frozen Linux license payload missing: $LICENSES/$path" >&2; exit 1; }
           done
+          LINUX_NOTICES="$LICENSES/linux-system"
+          test -s "$LINUX_NOTICES/manifest.json" || { echo "Frozen Linux system notice manifest missing: $LINUX_NOTICES/manifest.json" >&2; exit 1; }
+          test -s "$LINUX_NOTICES/THIRD-PARTY-NOTICES.md" || { echo "Frozen Linux system notice index missing: $LINUX_NOTICES/THIRD-PARTY-NOTICES.md" >&2; exit 1; }
+          uv run --python 3.13 --locked --group dev python - "$LINUX_NOTICES" <<'PY'
+          import hashlib
+          import json
+          import sys
+          from pathlib import Path, PurePosixPath
+
+          root = Path(sys.argv[1])
+          manifest_path = root / "manifest.json"
+          index_path = root / "THIRD-PARTY-NOTICES.md"
+          if root.is_symlink() or manifest_path.is_symlink() or index_path.is_symlink():
+              raise SystemExit("Frozen Linux system-notice output contains a symlink")
+          resolved_root = root.resolve(strict=True)
+          manifest_path.resolve(strict=True).relative_to(resolved_root)
+          index_path.resolve(strict=True).relative_to(resolved_root)
+          manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+          packages = manifest.get("source_packages")
+          texts = manifest.get("texts")
+          if manifest.get("schema") != 1 or not isinstance(packages, list) or not packages:
+              raise SystemExit("Linux system-notice manifest has no validated source-package inventory")
+          if not isinstance(texts, list) or not texts:
+              raise SystemExit("Linux system-notice manifest has no notice texts")
+          if not index_path.is_file() or index_path.stat().st_size == 0:
+              raise SystemExit("Frozen Linux system-notice index is not a nonempty regular file")
+          seen = set()
+          for entry in texts:
+              if not isinstance(entry, dict):
+                  raise SystemExit("Linux system-notice manifest contains an invalid text record")
+              raw = entry.get("path")
+              if not isinstance(raw, str) or not raw or "\\" in raw:
+                  raise SystemExit("Linux system-notice manifest contains an unsafe text path")
+              relative = PurePosixPath(raw)
+              if relative.is_absolute() or any(part in ("", ".", "..") for part in raw.split("/")):
+                  raise SystemExit(f"Linux system-notice path escapes its root: {raw!r}")
+              if relative.parts[:2] != ("notices", "package") or relative.suffix.lower() != ".txt":
+                  raise SystemExit(f"Unexpected Linux system-notice text path: {raw!r}")
+              if raw in seen:
+                  raise SystemExit(f"Duplicate Linux system-notice text path: {raw!r}")
+              seen.add(raw)
+              path = root.joinpath(*relative.parts)
+              cursor = root
+              for part in relative.parts:
+                  cursor = cursor / part
+                  if cursor.is_symlink():
+                      raise SystemExit(f"Linux system-notice text traverses a symlink: {raw!r}")
+              resolved = path.resolve(strict=True)
+              resolved.relative_to(resolved_root)
+              if not resolved.is_file():
+                  raise SystemExit(f"Linux system-notice text is not a regular file: {raw!r}")
+              data = resolved.read_bytes()
+              if not data or len(data) != entry.get("size"):
+                  raise SystemExit(f"Linux system-notice text size mismatch: {raw!r}")
+              if hashlib.sha256(data).hexdigest() != entry.get("sha256"):
+                  raise SystemExit(f"Linux system-notice text SHA-256 mismatch: {raw!r}")
+          print(f"Verified Linux system-package notices: {len(packages)} source packages, {len(texts)} notice texts.")
+          PY
           echo 'Frozen Linux license manifest SHA-256:'
           sha256sum "$LICENSES/manifest.json"
           echo 'Frozen Linux bundle file count:'

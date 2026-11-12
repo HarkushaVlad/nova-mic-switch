@@ -61,6 +61,18 @@ class PackagingDefinitionTests(unittest.TestCase):
         (licenses_dir / "qt-6.12.0/qt-license.txt").write_text("qt fixture", encoding="utf-8")
         (licenses_dir / "ffmpeg-9.0.1").mkdir()
         (licenses_dir / "ffmpeg-9.0.1/ffmpeg-license.txt").write_text("ffmpeg fixture", encoding="utf-8")
+        linux_notice_tmp = tempfile.TemporaryDirectory(prefix="nova-linux-notices-", dir=TEST_TEMP_DIR)
+        self.addCleanup(linux_notice_tmp.cleanup)
+        linux_notices_dir = Path(linux_notice_tmp.name)
+        package_notice = linux_notices_dir / "notices/package/libsample1-copyright.txt"
+        package_notice.parent.mkdir(parents=True)
+        package_notice.write_text("fixture Ubuntu copyright text\n", encoding="utf-8")
+        linux_notice_index = linux_notices_dir / "THIRD-PARTY-NOTICES.md"
+        linux_notice_index.write_text("# Linux package notices\n", encoding="utf-8")
+        linux_notice_manifest = linux_notices_dir / "manifest.json"
+        linux_notice_manifest.write_text(json.dumps({"schema": 1, "source_packages": [{"name": "sample", "version": "1"}],
+                                                     "texts": [{"path": "notices/package/libsample1-copyright.txt"}]}),
+                                        encoding="utf-8")
         (licenses_dir / "manifest.json").write_text(
             json.dumps({"texts": [
                 {"destination": "sample-license.txt"},
@@ -83,6 +95,18 @@ class PackagingDefinitionTests(unittest.TestCase):
         pyinstaller_utils = ModuleType("PyInstaller.utils")
         pyinstaller_utils.hooks = hooks
         pyinstaller.utils = pyinstaller_utils
+        policy_calls = []
+        native_policy = ModuleType("native_policy")
+        native_policy.apply_windows_native_policy = lambda *args: policy_calls.append(args)
+        linux_notice_calls = []
+        linux_notice_module = ModuleType("collect_linux_notices")
+
+        def fake_collect_linux_notices(*, toc_rows, output_dir):
+            linux_notice_calls.append((list(toc_rows), Path(output_dir)))
+            return {"manifest": str(linux_notice_manifest),
+                    "files": [str(linux_notice_manifest), str(linux_notice_index), str(package_notice)]}
+
+        linux_notice_module.collect_linux_notices = fake_collect_linux_notices
         namespace = {
             "SPECPATH": str(ROOT / "packaging"),
             "Analysis": FakeAnalysis,
@@ -97,6 +121,8 @@ class PackagingDefinitionTests(unittest.TestCase):
         ):
             captures.clear()
             metadata_calls.clear()
+            policy_calls.clear()
+            linux_notice_calls.clear()
             namespace.update({"__file__": str(ROOT / "packaging/nova-mic-switch.spec")})
             with patch.object(sys, "platform", platform), patch.dict(
                 sys.modules,
@@ -105,6 +131,8 @@ class PackagingDefinitionTests(unittest.TestCase):
                     "PyInstaller": pyinstaller,
                     "PyInstaller.utils": pyinstaller_utils,
                     "PyInstaller.utils.hooks": hooks,
+                    "native_policy": native_policy,
+                    "collect_linux_notices": linux_notice_module,
                 },
             ):
                 exec(compile(source, namespace["__file__"], "exec"), namespace)
@@ -116,6 +144,8 @@ class PackagingDefinitionTests(unittest.TestCase):
             self.assertIn(expected_backend, kwargs["hiddenimports"])
             self.assertNotIn(other_backend, kwargs["hiddenimports"])
             self.assertEqual(kwargs["binaries"], [])
+            self.assertEqual(len(policy_calls), int(platform == "win32" and os.name == "nt"))
+            self.assertEqual(len(linux_notice_calls), int(platform == "linux"))
             datas = namespace["a"].datas
             binary_names = [row[0].lower() for row in namespace["a"].binaries]
             data_names = [row[0].lower() for row in datas if isinstance(row, tuple) and len(row) == 3]
@@ -135,6 +165,27 @@ class PackagingDefinitionTests(unittest.TestCase):
                                 for _, destination in normalized_license_datas))
             self.assertTrue(any(destination == "licenses/ffmpeg-9.0.1"
                                 for _, destination in normalized_license_datas))
+            self.assertTrue(any(Path(source).name == "sample-license.txt" and destination == "licenses"
+                                for source, destination in normalized_license_datas))
+            linux_notice_datas = [row for row in datas if isinstance(row, tuple) and len(row) == 3
+                                  and str(row[0]).replace("\\", "/").startswith("licenses/linux-system/")]
+            if platform == "linux":
+                rows, requested_output = linux_notice_calls[0]
+                self.assertEqual(requested_output, ROOT / "build/linux-system-notices")
+                self.assertFalse(any("virtualkeyboard" in str(row[:2]).lower() or "pdf" in str(row[:2]).lower()
+                                     for row in rows))
+                expected_notice_files = {
+                    (f"licenses/linux-system/{path.relative_to(linux_notices_dir).as_posix()}", str(path.resolve()), "DATA")
+                    for path in (linux_notice_manifest, linux_notice_index, package_notice)
+                }
+                self.assertEqual(set(linux_notice_datas), expected_notice_files)
+                for destination, source_path, typecode in linux_notice_datas:
+                    self.assertFalse(Path(destination).is_absolute())
+                    self.assertTrue(Path(source_path).is_absolute())
+                    self.assertTrue(Path(source_path).is_file())
+                    self.assertEqual(typecode, "DATA")
+            else:
+                self.assertEqual(linux_notice_datas, [])
             self.assertEqual(
                 metadata_calls,
                 ["PySide6", "PySide6_Essentials", "PySide6_Addons", "shiboken6", "hidapi", "pyinstaller"],

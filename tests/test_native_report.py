@@ -5,6 +5,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
@@ -86,7 +87,7 @@ class NativeReportTests(unittest.TestCase):
              patch.object(native_report, "_host_provider", return_value=host):
             report = native_report.build_report(self.bundle, self.workpath, self.output)
         row = report["native_files"][0]
-        self.assertEqual(row["original_input_path"], str(canonical_source))
+        self.assertEqual(row["original_input_path"], str(canonical_source.resolve()))
         self.assertEqual(row["provider"]["kind"], "system-package")
 
     def test_unique_wheel_mapping_reports_original_hash_difference(self):
@@ -158,6 +159,29 @@ class NativeReportTests(unittest.TestCase):
             self.assertFalse(native_report._is_python_runtime_source(source))
             self.assertTrue(native_report._is_python_runtime_source(runtime_source))
         self.assertEqual(provider["provider"]["kind"], "unresolved")
+
+    def test_windows_python_runtime_classification_only_accepts_runtime_binaries(self):
+        prefix = self.root / "cpython"
+        stdlib_extension = prefix / "DLLs" / "_sqlite3.pyd"
+        library_extension = prefix / "Lib" / "encodings" / "_native.pyd"
+        vendor_dll = prefix / "DLLs" / "mysql.dll"
+        library_dll = prefix / "Lib" / "jvm.dll"
+        python_dll = prefix / "python313.dll"
+        for path in (stdlib_extension, library_extension, vendor_dll, library_dll, python_dll):
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b"fixture")
+        site_extension = prefix / "Lib" / "site-packages" / "vendor.pyd"
+        site_extension.parent.mkdir(parents=True)
+        site_extension.write_bytes(b"vendor")
+        with patch.object(native_report, "os", SimpleNamespace(name="nt")), \
+             patch.object(native_report.sys, "prefix", str(prefix)), \
+             patch.object(native_report.sys, "base_prefix", str(prefix)):
+            self.assertTrue(native_report._is_python_runtime_source(stdlib_extension))
+            self.assertTrue(native_report._is_python_runtime_source(library_extension))
+            self.assertTrue(native_report._is_python_runtime_source(python_dll))
+            self.assertFalse(native_report._is_python_runtime_source(vendor_dll))
+            self.assertFalse(native_report._is_python_runtime_source(library_dll))
+            self.assertFalse(native_report._is_python_runtime_source(site_extension))
 
     @unittest.skipUnless(sys.platform.startswith("linux"), "usrmerge paths are Linux-specific")
     def test_usrmerge_aliases_are_queried_only_for_same_existing_file(self):
@@ -326,7 +350,7 @@ class NativeReportTests(unittest.TestCase):
         self.assertEqual(result["results"][0]["relative_path"], "libavutil.so.60")
         self.assertEqual(run.call_args.args[0][-1], "--_probe-ffmpeg")
         self.assertEqual(run.call_args.kwargs["timeout"], 20)
-        self.assertIn(entry["path"], run.call_args.kwargs["input"])
+        self.assertEqual(entry["path"], json.loads(run.call_args.kwargs["input"])["libraries"][0]["path"])
 
         with patch.object(native_report.subprocess, "run", side_effect=subprocess.TimeoutExpired("probe", 20)):
             timeout = native_report._ffmpeg_probe_subprocess(self.bundle, [entry])

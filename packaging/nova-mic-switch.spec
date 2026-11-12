@@ -94,6 +94,62 @@ def _excluded_unused_qt_plugin(row):
 # Keep ordinary platform input, image/SVG, multimedia/FFmpeg, and any QtQuick closure.
 a.binaries = [row for row in a.binaries if not _excluded_unused_qt_plugin(row)]
 a.datas = [row for row in a.datas if not _excluded_unused_qt_plugin(row)]
+if IS_LINUX:
+    sys.path.insert(0, str(ROOT / "scripts"))
+    from collect_linux_notices import collect_linux_notices
+
+    linux_notice_result = collect_linux_notices(
+        toc_rows=a.binaries + a.datas,
+        output_dir=ROOT / "build" / "linux-system-notices",
+    )
+    manifest_path = Path(linux_notice_result["manifest"])
+    if not manifest_path.is_absolute() or manifest_path.name != "manifest.json" or manifest_path.is_symlink():
+        raise SystemExit("Linux notice collector returned an invalid manifest path")
+    notice_root = manifest_path.parent.resolve(strict=True)
+    generated_files = linux_notice_result["files"]
+    if not isinstance(generated_files, list):
+        raise SystemExit("Linux notice collector returned an invalid generated-file list")
+    notice_data_rows = []
+    notice_relpaths = set()
+    required_notice_files = {"manifest.json", "THIRD-PARTY-NOTICES.md"}
+    for generated_file in generated_files:
+        path = Path(generated_file)
+        if not path.is_absolute():
+            raise SystemExit("Linux notice collector returned a non-absolute generated-file path")
+        try:
+            relative = path.relative_to(notice_root)
+        except ValueError as exc:
+            raise SystemExit("Linux notice collector returned a file outside its output root") from exc
+        if any(part in ("", ".", "..") for part in relative.parts) or path.is_symlink():
+            raise SystemExit("Linux notice collector returned an unsafe generated-file path")
+        cursor = notice_root
+        for part in relative.parts:
+            cursor = cursor / part
+            if cursor.is_symlink():
+                raise SystemExit("Linux notice output traverses a symlink")
+        try:
+            resolved = path.resolve(strict=True)
+            resolved.relative_to(notice_root)
+        except (OSError, ValueError) as exc:
+            raise SystemExit("Linux notice output is missing or escapes its output root") from exc
+        if not resolved.is_file() or resolved.suffix.lower() not in {".txt", ".json", ".md"}:
+            raise SystemExit("Linux notice collector returned a non-text output")
+        relative_name = relative.as_posix()
+        if relative_name in notice_relpaths:
+            raise SystemExit("Linux notice collector returned duplicate output paths")
+        notice_relpaths.add(relative_name)
+        if relative_name not in required_notice_files and not (
+            len(relative.parts) == 3 and relative.parts[:2] == ("notices", "package")
+            and resolved.suffix.lower() == ".txt"
+        ):
+            raise SystemExit("Linux notice collector returned an unexpected output path")
+        if relative_name in required_notice_files and resolved.stat().st_size == 0:
+            raise SystemExit("Linux notice collector returned an empty index or manifest")
+        notice_destination = (Path("licenses") / "linux-system" / relative).as_posix()
+        notice_data_rows.append((notice_destination, str(resolved), "DATA"))
+    if not required_notice_files <= notice_relpaths:
+        raise SystemExit("Linux notice collector omitted its manifest or notice index")
+    a.datas.extend(notice_data_rows)
 if IS_WINDOWS and os.name == "nt":
     sys.path.insert(0, str(ROOT / "packaging" / "windows"))
     from native_policy import apply_windows_native_policy

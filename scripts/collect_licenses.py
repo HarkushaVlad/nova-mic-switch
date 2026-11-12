@@ -391,7 +391,8 @@ def _python_license(explicit: Path | None, fetch: bool) -> tuple[bytes, str]:
     )
 
 
-def _collection_inputs(*, distributions=None, python_license=None, fetch_python_license=False):
+def _collection_inputs(*, distributions=None, python_license=None, fetch_python_license=False,
+                       python_license_override=None):
     try:
         selected = {name: (distributions[name] if distributions is not None else importlib.metadata.distribution(name))
                     for name in COLLECT_DISTRIBUTIONS}
@@ -420,7 +421,11 @@ def _collection_inputs(*, distributions=None, python_license=None, fetch_python_
                           "source_url": None, "destination": f"packages/{relative}",
                           "group": "distribution", "material_kind": "distribution-provided license or notice text",
                           "context": name})
-    py_data, py_source = _python_license(Path(python_license) if python_license is not None else None, fetch_python_license)
+    if python_license_override is None:
+        py_data, py_source = _python_license(Path(python_license) if python_license is not None else None,
+                                             fetch_python_license)
+    else:
+        py_data, py_source = python_license_override
     texts.append({"name": "Python-LICENSE.txt", "data": py_data, "version": platform.python_version(),
                   "source_url": py_source, "destination": "Python-LICENSE.txt", "group": "python",
                   "material_kind": "CPython license", "context": "CPython license text."})
@@ -438,10 +443,11 @@ def _collection_inputs(*, distributions=None, python_license=None, fetch_python_
 
 
 def _collect_licenses(output_dir: Path, *, distributions=None, python_license: Path | None = None,
-                      fetch_python_license: bool = False) -> Path:
+                      fetch_python_license: bool = False, python_license_override=None) -> Path:
     """Collect curated and installed license texts with deterministic provenance."""
     _, package_rows, texts, py_source, input_digest = _collection_inputs(
-        distributions=distributions, python_license=python_license, fetch_python_license=fetch_python_license)
+        distributions=distributions, python_license=python_license, fetch_python_license=fetch_python_license,
+        python_license_override=python_license_override)
     for entry in texts:
         entry["sha256"] = _sha256(entry["data"])
         entry["size_bytes"] = len(entry["data"])
@@ -501,8 +507,21 @@ def ensure_licenses(output_dir: Path, *, distributions=None, python_license: Pat
                     fetch_python_license: bool = False) -> Path:
     """Use a complete current-input-matched precollection or regenerate it offline."""
     output_dir = Path(output_dir)
+    try:
+        python_license_override = _python_license(
+            Path(python_license) if python_license is not None else None, fetch=False)
+    except LicenseCollectionError as local_error:
+        if python_license is not None:
+            raise
+        python_license_override = _cached_python_license(output_dir)
+        if python_license_override is None:
+            if fetch_python_license:
+                python_license_override = _python_license(None, fetch=True)
+            else:
+                raise local_error
     _, package_rows, texts, py_source, expected_snapshot = _collection_inputs(
-        distributions=distributions, python_license=python_license, fetch_python_license=fetch_python_license)
+        distributions=distributions, python_license=python_license, fetch_python_license=False,
+        python_license_override=python_license_override)
     expected_entries = []
     for item in texts:
         entry = {key: value for key, value in item.items() if key != "data"}
@@ -545,8 +564,82 @@ def ensure_licenses(output_dir: Path, *, distributions=None, python_license: Pat
             raise ValueError("cached generated file list is incomplete")
         return output_dir
     except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError, AttributeError):
-        return collect_licenses(output_dir, distributions=distributions, python_license=python_license,
-                                fetch_python_license=fetch_python_license)
+        try:
+            return _collect_licenses(output_dir, distributions=distributions, python_license=python_license,
+                                     python_license_override=python_license_override)
+        except OSError as exc:
+            raise LicenseCollectionError(f"License collection filesystem error: {exc}") from exc
+
+
+def _cached_python_license(output_dir: Path) -> tuple[bytes, str] | None:
+    """Load only a version-matched, internally hash-verified cached Python license."""
+    output_dir = Path(output_dir)
+    manifest_path = output_dir / "manifest.json"
+    if output_dir.is_symlink() or manifest_path.is_symlink():
+        return None
+    try:
+        output_root = output_dir.resolve(strict=True)
+        manifest_path.resolve(strict=True).relative_to(output_root)
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        return None
+    if (not isinstance(manifest, dict) or manifest.get("schema_version") != 1
+            or manifest.get("generated_files") != ["THIRD-PARTY-NOTICES.md", "manifest.json"]):
+        return None
+    snapshot_hash = manifest.get("input_snapshot_sha256")
+    if not isinstance(snapshot_hash, str) or len(snapshot_hash) != 64 \
+            or any(character not in "0123456789abcdef" for character in snapshot_hash):
+        return None
+    python_record = manifest.get("python") if isinstance(manifest, dict) else None
+    if not isinstance(python_record, dict) or python_record.get("version") != platform.python_version() \
+            or python_record.get("platform") != sys.platform:
+        return None
+    source = python_record.get("license_source")
+    permitted_sources = {"explicit local file", "local Python installation",
+                         PYTHON_LICENSE_URL.format(version=platform.python_version())}
+    if not isinstance(source, str) or source not in permitted_sources:
+        return None
+    entries = manifest.get("texts")
+    if not isinstance(entries, list):
+        return None
+    matches = [entry for entry in entries if isinstance(entry, dict)
+               and entry.get("destination") == "Python-LICENSE.txt"]
+    if len(matches) != 1:
+        return None
+    entry = matches[0]
+    if (entry.get("group") != "python" or entry.get("name") != "Python-LICENSE.txt"
+            or entry.get("version") != platform.python_version() or entry.get("source_url") != source
+            or entry.get("material_kind") != "CPython license" or entry.get("context") != "CPython license text."):
+        return None
+    size, expected_hash = entry.get("size_bytes"), entry.get("sha256")
+    if type(size) is not int or size <= 0 or size > MAX_TEXT_BYTES or not isinstance(expected_hash, str):
+        return None
+    license_path = output_dir / "Python-LICENSE.txt"
+    cursor = output_dir
+    try:
+        for part in Path("Python-LICENSE.txt").parts:
+            cursor = cursor / part
+            if cursor.is_symlink():
+                return None
+        license_path.resolve(strict=True).relative_to(output_root)
+        if not license_path.is_file():
+            return None
+        data = license_path.read_bytes()
+    except (OSError, ValueError):
+        return None
+    if len(data) != size or _sha256(data) != expected_hash:
+        return None
+    notice_path = output_dir / "THIRD-PARTY-NOTICES.md"
+    if notice_path.is_symlink():
+        return None
+    try:
+        notice_path.resolve(strict=True).relative_to(output_root)
+        notice = notice_path.read_bytes()
+    except (OSError, ValueError):
+        return None
+    if _sha256(notice) != manifest.get("notice_sha256"):
+        return None
+    return data, source
 
 
 def _render_notice(packages, texts, python_source: str) -> str:

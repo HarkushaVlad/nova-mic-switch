@@ -242,6 +242,45 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("Frozen Windows license manifest SHA-256", windows_job)
         self.assertIn("Frozen Windows native payload inventory", windows_job)
 
+    def test_linux_system_package_notices_are_frozen_and_verified(self):
+        workflow = (ROOT / ".github" / "workflows" / "build-release.yml").read_text(encoding="utf-8")
+        linux_start = workflow.index("  linux-x86_64:")
+        windows_start = workflow.index("  windows-x64:")
+        linux_job = workflow[linux_start:windows_start]
+        build_start = linux_job.index("      - name: Build Linux onedir bundle and AppImage")
+        build_end = linux_job.index("      - name:", build_start + 1)
+        build_step = linux_job[build_start:build_end]
+        for required in (
+            'LINUX_NOTICES="$LICENSES/linux-system"',
+            'test -s "$LINUX_NOTICES/manifest.json"',
+            'test -s "$LINUX_NOTICES/THIRD-PARTY-NOTICES.md"',
+            'manifest.get("source_packages")',
+            'manifest.get("texts")',
+            'hashlib.sha256(data).hexdigest()',
+            'resolved.relative_to(resolved_root)',
+            'entry.get("size")',
+            'source packages, {len(texts)} notice texts',
+        ):
+            self.assertIn(required, build_step)
+        self.assertLess(build_step.index("Frozen Linux license payload missing"),
+                        build_step.index("Verified Linux system-package notices"))
+        windows_job = workflow[windows_start:workflow.index("  publish-draft:", windows_start)]
+        self.assertNotIn("linux-system", windows_job)
+        self.assertNotIn("collect_linux_notices", windows_job)
+
+        spec = (ROOT / "packaging/nova-mic-switch.spec").read_text(encoding="utf-8")
+        filter_position = spec.index("a.binaries = [row for row in a.binaries if not _excluded_unused_qt_plugin(row)]")
+        helper_position = spec.index("from collect_linux_notices import collect_linux_notices")
+        append_position = spec.index("a.datas.extend(notice_data_rows)")
+        policy_position = spec.index("if IS_WINDOWS and os.name == \"nt\":")
+        pyz_position = spec.index("pyz = PYZ(a.pure)")
+        self.assertLess(filter_position, helper_position)
+        self.assertLess(helper_position, append_position)
+        self.assertLess(append_position, policy_position)
+        self.assertLess(append_position, pyz_position)
+        self.assertIn("toc_rows=a.binaries + a.datas", spec)
+        self.assertIn('"DATA"', spec)
+
     def test_linux_hidapi_source_build_policy_and_read_only_runtime_proof(self):
         workflow = (ROOT / ".github" / "workflows" / "build-release.yml").read_text(encoding="utf-8")
         linux_job = workflow[workflow.index("  linux-x86_64:"):workflow.index("  windows-x64:")]

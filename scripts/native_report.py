@@ -168,10 +168,13 @@ def _is_python_runtime_source(path: Path) -> bool:
         except (OSError, ValueError):
             continue
         normalized = tuple(part.casefold() for part in relative_parts)
+        if any(part in {"site-packages", "dist-packages"} for part in normalized):
+            continue
         if os.name == "nt":
-            if normalized and normalized[0] in {"lib", "dlls"}:
+            if normalized and normalized[0] in {"lib", "dlls"} \
+                    and path.suffix.casefold() == ".pyd":
                 return True
-            if len(normalized) == 1 and re.fullmatch(r"python3[0-9]*\.dll", normalized[0]):
+            if len(normalized) == 1 and re.fullmatch(r"python3(?:[0-9]+)?(?:_d)?\.dll", normalized[0]):
                 return True
         else:
             if len(normalized) >= 2 and normalized[0] == "lib" and re.fullmatch(r"python3(?:\.\d+)?", normalized[1]):

@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import importlib.metadata
+import io
 import json
 import os
 import shutil
@@ -168,6 +169,81 @@ class LicenseCollectorTests(unittest.TestCase):
             self.assertNotEqual(previous_digest, updated["input_snapshot_sha256"])
             self.assertEqual(next(row["version"] for row in updated["distributions"] if row["name"] == "hidapi"),
                              "2.0.0")
+
+    def test_fetched_python_license_bootstraps_default_offline_ensure_and_rebuild(self):
+        output = self.root / "fetched-license-cache"
+        payload = b"Official CPython license fixture\n"
+        with patch.object(collector, "ROOT", self.fixture_root), \
+             patch.object(collector, "_python_license_candidates", return_value=[]), \
+             patch.object(collector.urllib.request, "urlopen", return_value=io.BytesIO(payload)) as urlopen:
+            collector.collect_licenses(output, distributions=self.fake_dists, fetch_python_license=True)
+            initial_manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
+            self.assertEqual(initial_manifest["python"]["license_source"],
+                             collector.PYTHON_LICENSE_URL.format(version=collector.platform.python_version()))
+            original_snapshot = initial_manifest["input_snapshot_sha256"]
+            curated_text = self.fixture_root / "packaging/licenses/qt-6.12.0/GPL-3.0-only.txt"
+            changed_text = curated_text.read_bytes() + b"\n"
+            curated_text.write_bytes(changed_text)
+            curated_manifest_path = self.fixture_root / "packaging/licenses/qt-6.12.0/manifest.json"
+            curated_manifest = json.loads(curated_manifest_path.read_text(encoding="utf-8"))
+            license_row = next(row for row in curated_manifest["licenses"]
+                               if row["filename"] == curated_text.name)
+            license_row["sha256"] = hashlib.sha256(changed_text).hexdigest()
+            curated_manifest_path.write_text(json.dumps(curated_manifest, indent=2) + "\n", encoding="utf-8")
+            with patch.object(collector.urllib.request, "urlopen", side_effect=AssertionError("unexpected network")):
+                collector.ensure_licenses(output, distributions=self.fake_dists)
+                rebuilt = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
+                self.assertNotEqual(original_snapshot, rebuilt["input_snapshot_sha256"])
+                self.assertEqual(rebuilt["python"]["license_source"], initial_manifest["python"]["license_source"])
+                self.assertEqual((output / "Python-LICENSE.txt").read_bytes(), payload)
+                self.assertEqual((output / "qt-6.12.0/GPL-3.0-only.txt").read_bytes(), changed_text)
+            urlopen.assert_called_once()
+
+    def test_invalid_cached_python_license_cannot_bootstrap_offline_collection(self):
+        output = self.root / "invalid-fetched-license-cache"
+        payload = b"Official CPython license fixture\n"
+        with patch.object(collector, "ROOT", self.fixture_root), \
+             patch.object(collector, "_python_license_candidates", return_value=[]), \
+             patch.object(collector.urllib.request, "urlopen", return_value=io.BytesIO(payload)):
+            collector.collect_licenses(output, distributions=self.fake_dists, fetch_python_license=True)
+        manifest_path = output / "manifest.json"
+        original_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        license_path = output / "Python-LICENSE.txt"
+        original_data = license_path.read_bytes()
+        mutations = (
+            ("manifest runtime version", lambda doc: doc["python"].__setitem__("version", "0.0")),
+            ("manifest provenance", lambda doc: doc["python"].__setitem__("license_source", "unknown source")),
+            ("text version", lambda doc: next(row for row in doc["texts"]
+                                               if row["destination"] == "Python-LICENSE.txt").__setitem__("version", "0.0")),
+            ("text source path", lambda doc: next(row for row in doc["texts"]
+                                                  if row["destination"] == "Python-LICENSE.txt").__setitem__("source_url", "../escape")),
+            ("text size", lambda doc: next(row for row in doc["texts"]
+                                           if row["destination"] == "Python-LICENSE.txt").__setitem__("size_bytes", len(payload) + 1)),
+            ("text hash", lambda doc: next(row for row in doc["texts"]
+                                           if row["destination"] == "Python-LICENSE.txt").__setitem__("sha256", "0" * 64)),
+        )
+        with patch.object(collector, "ROOT", self.fixture_root), \
+             patch.object(collector, "_python_license_candidates", return_value=[]), \
+             patch.object(collector.urllib.request, "urlopen", side_effect=AssertionError("unexpected network")):
+            for label, mutate in mutations:
+                with self.subTest(label=label):
+                    document = json.loads(json.dumps(original_manifest))
+                    mutate(document)
+                    manifest_path.write_text(json.dumps(document), encoding="utf-8")
+                    with self.assertRaisesRegex(collector.LicenseCollectionError, "Python license text not found locally"):
+                        collector.ensure_licenses(output, distributions=self.fake_dists)
+            manifest_path.write_text(json.dumps(original_manifest), encoding="utf-8")
+            license_path.write_bytes(original_data + b"corruption")
+            with self.assertRaisesRegex(collector.LicenseCollectionError, "Python license text not found locally"):
+                collector.ensure_licenses(output, distributions=self.fake_dists)
+            license_path.write_bytes(original_data)
+            if os.name != "nt":
+                target = self.root / "python-license-outside.txt"
+                target.write_bytes(original_data)
+                license_path.unlink()
+                license_path.symlink_to(target)
+                with self.assertRaisesRegex(collector.LicenseCollectionError, "Python license text not found locally"):
+                    collector.ensure_licenses(output, distributions=self.fake_dists)
 
     def test_unchanged_cache_is_offline_and_does_not_recollect(self):
         output = self.collect()
