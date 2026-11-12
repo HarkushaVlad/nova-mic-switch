@@ -225,7 +225,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
         install_step = linux_job.index("Install Qt headless runtime libraries")
         unit_step = linux_job.index("Run unit tests")
         self.assertLess(install_step, unit_step)
-        self.assertIn("sudo apt-get install --no-install-recommends -y libegl1 libopengl0", linux_job)
+        self.assertIn("sudo apt-get install --no-install-recommends -y libegl1 libopengl0 libpulse0", linux_job)
         self.assertIn("Frozen Linux license manifest SHA-256", linux_job)
         self.assertIn("Frozen Linux native library inventory", linux_job)
         windows_job = workflow[workflow.index("  windows-x64:"):workflow.index("  publish-draft:")]

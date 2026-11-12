@@ -102,7 +102,7 @@ jobs:
       - name: Install Qt headless runtime libraries
         run: |
           sudo apt-get update
-          sudo apt-get install --no-install-recommends -y libegl1 libopengl0
+          sudo apt-get install --no-install-recommends -y libegl1 libopengl0 libpulse0
       - name: Run unit tests
         run: uv run --python 3.13 --locked --group dev python -m unittest discover -s tests -v
       - name: Collect bundled third-party license notices

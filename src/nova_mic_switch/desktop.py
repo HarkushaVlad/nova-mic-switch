@@ -7,6 +7,7 @@ import hashlib
 import os
 import stat
 import sys
+import time
 from dataclasses import replace
 from pathlib import Path
 
@@ -71,6 +72,14 @@ class InstanceCoordinator(QObject):
 
     activation = Signal(str)
 
+    _IPC_DEADLINE_SECONDS = 1.8
+    _IPC_CONNECTION_MILLISECONDS = 150
+    _IPC_WAIT_SLICE_MILLISECONDS = 50
+    _IPC_MAX_FRAME_BYTES = 64
+    _IPC_ACK = b"OK\n"
+    _IPC_COMMANDS = {"activate", "tray"}
+    _IPC_SERVER_LIFETIME_MILLISECONDS = 2500
+
     def __init__(self, config_dir: Path):
         super().__init__()
         canonical = str(Path(config_dir).expanduser().resolve())
@@ -83,6 +92,8 @@ class InstanceCoordinator(QObject):
         self.server.setSocketOptions(QLocalServer.SocketOption.UserAccessOption)
         self.server.newConnection.connect(self._accept)
         self.primary = False
+        self._connection_buffers = {}
+        self._connection_timers = {}
 
     @staticmethod
     def _linux_server_path(basename: str) -> str:
@@ -118,17 +129,11 @@ class InstanceCoordinator(QObject):
         return server_path
 
     def acquire_or_notify(self, command: str) -> bool:
+        if command not in self._IPC_COMMANDS:
+            raise ValueError("Single-instance command must be 'activate' or 'tray'.")
         Path(self.lock.fileName()).parent.mkdir(parents=True, exist_ok=True)
         if not self.lock.tryLock(0):
-            for _ in range(5):
-                socket = QLocalSocket()
-                socket.connectToServer(self.server_name)
-                if socket.waitForConnected(100):
-                    socket.write(command.encode("ascii"))
-                    socket.waitForBytesWritten(250)
-                    socket.disconnectFromServer()
-                    break
-            return False
+            return self._notify_existing(command)
         # The exclusive lock proves no live owner can be using this endpoint.
         QLocalServer.removeServer(self.server_name)
         if not self.server.listen(self.server_name):
@@ -137,17 +142,132 @@ class InstanceCoordinator(QObject):
         self.primary = True
         return True
 
+    def _notify_existing(self, command: str) -> bool:
+        deadline = time.monotonic() + self._IPC_DEADLINE_SECONDS
+        request = command.encode("ascii") + b"\n"
+        socket = QLocalSocket()
+        try:
+            while time.monotonic() < deadline:
+                socket.connectToServer(self.server_name)
+                remaining_ms = max(1, int((deadline - time.monotonic()) * 1000))
+                if socket.waitForConnected(min(self._IPC_CONNECTION_MILLISECONDS, self._IPC_WAIT_SLICE_MILLISECONDS, remaining_ms)):
+                    break
+                socket.abort()
+                backoff = min(0.02, max(0.0, deadline - time.monotonic()))
+                if backoff:
+                    time.sleep(backoff)
+            else:
+                raise RuntimeError("Could not contact the existing Nova Mic Switch instance; no command was confirmed delivered.")
+
+            written = socket.write(request)
+            if written != len(request):
+                raise RuntimeError("Could not send the complete single-instance command; delivery was not confirmed.")
+            socket.flush()
+
+            while socket.bytesToWrite() > 0:
+                if socket.state() == QLocalSocket.LocalSocketState.UnconnectedState:
+                    raise RuntimeError("The existing instance disconnected while the command was being sent; delivery is unknown.")
+                remaining_ms = max(1, int((deadline - time.monotonic()) * 1000))
+                if time.monotonic() >= deadline:
+                    raise RuntimeError("Timed out sending the single-instance command; delivery was not confirmed.")
+                socket.waitForBytesWritten(min(remaining_ms, self._IPC_WAIT_SLICE_MILLISECONDS))
+                # Qt may report false when the bytes were flushed before the wait.
+                if socket.bytesToWrite() > 0 and socket.state() == QLocalSocket.LocalSocketState.UnconnectedState:
+                    raise RuntimeError("The existing instance disconnected while the command was being sent; delivery is unknown.")
+
+            response = bytearray()
+            while time.monotonic() < deadline:
+                available = socket.bytesAvailable()
+                if available:
+                    response.extend(bytes(socket.read(available)))
+                    if len(response) > len(self._IPC_ACK):
+                        raise RuntimeError("The existing instance returned an invalid acknowledgement.")
+                    if response:
+                        if self._IPC_ACK.startswith(response):
+                            if response == self._IPC_ACK:
+                                return False
+                        else:
+                            raise RuntimeError("The existing instance returned an invalid acknowledgement.")
+                if socket.state() == QLocalSocket.LocalSocketState.UnconnectedState:
+                    raise RuntimeError("The existing instance disconnected before acknowledging the command; delivery is unknown.")
+                remaining_ms = max(1, int((deadline - time.monotonic()) * 1000))
+                socket.waitForReadyRead(min(remaining_ms, self._IPC_WAIT_SLICE_MILLISECONDS))
+            raise RuntimeError("Timed out waiting for the existing instance to acknowledge the command; delivery is unknown.")
+        finally:
+            socket.abort()
+            socket.deleteLater()
+
     def _accept(self):
         while self.server.hasPendingConnections():
             socket = self.server.nextPendingConnection()
-            socket.readyRead.connect(lambda s=socket: self.activation.emit(bytes(s.readAll()).decode("ascii", "ignore")))
-            socket.disconnected.connect(socket.deleteLater)
+            self._connection_buffers[socket] = bytearray()
+            timer = QTimer(socket)
+            timer.setSingleShot(True)
+            timer.setInterval(self._IPC_SERVER_LIFETIME_MILLISECONDS)
+            timer.timeout.connect(lambda s=socket: self._discard_connection(s, abort=True))
+            timer.start()
+            self._connection_timers[socket] = timer
+            socket.readyRead.connect(lambda s=socket: self._read_connection(s))
+            socket.disconnected.connect(lambda s=socket: self._discard_connection(s))
+            if socket.state() == QLocalSocket.LocalSocketState.UnconnectedState:
+                self._discard_connection(socket)
+                continue
             if socket.bytesAvailable():
-                self.activation.emit(bytes(socket.readAll()).decode("ascii", "ignore"))
+                self._read_connection(socket)
+
+    def _read_connection(self, socket):
+        buffer = self._connection_buffers.get(socket)
+        if buffer is None:
+            if socket in self._connection_buffers and socket.bytesAvailable():
+                socket.readAll()
+                socket.abort()
+            return
+        chunk = bytes(socket.readAll())
+        if not chunk:
+            return
+        buffer.extend(chunk)
+        if len(buffer) > self._IPC_MAX_FRAME_BYTES:
+            socket.abort()
+            return
+        newline = buffer.find(b"\n")
+        if newline < 0:
+            return
+        if newline != len(buffer) - 1:
+            socket.abort()
+            return
+        try:
+            command = bytes(buffer[:-1]).decode("ascii")
+        except UnicodeDecodeError:
+            socket.abort()
+            return
+        if command not in self._IPC_COMMANDS:
+            socket.abort()
+            return
+        self._connection_buffers[socket] = None
+        self.activation.emit(command)
+        if socket.write(self._IPC_ACK) != len(self._IPC_ACK):
+            socket.abort()
+            return
+        socket.flush()
+
+    def _discard_connection(self, socket, *, abort=False):
+        if socket not in self._connection_buffers and socket not in self._connection_timers:
+            return
+        self._connection_buffers.pop(socket, None)
+        timer = self._connection_timers.pop(socket, None)
+        if timer is not None:
+            timer.stop()
+        if abort and socket.state() != QLocalSocket.LocalSocketState.UnconnectedState:
+            socket.abort()
+        socket.deleteLater()
 
     def close(self):
         if self.primary:
             self.server.close()
+            for socket in tuple(self._connection_buffers):
+                self._discard_connection(socket, abort=True)
+            for socket in tuple(self._connection_timers):
+                self._discard_connection(socket, abort=True)
             self.lock.unlock()
             self.primary = False
 

@@ -205,7 +205,11 @@ class StartupTests(unittest.TestCase):
         self.assertFalse(manager.is_enabled())
 
     def test_linux_registration_content_update_and_escaping(self):
-        config = self.root / "cfg space" / 'quote"' / "back\\slash%$`"
+        config = self.root / "cfg space"
+        if os.name == "nt":
+            config /= "back slash%$`"
+        else:
+            config = config / 'quote"' / "back\\slash%$`"
         four_backslashes = "four" + "\\" * 4 + "slashes"
         executable = str(self.root / "opt nova app%" / "bin")
         command = (executable, "arg with space", 'q"uote', "back\\slash",

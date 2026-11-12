@@ -1,6 +1,7 @@
 import os
 import sys
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -521,24 +522,395 @@ class DesktopWindowTests(unittest.TestCase):
                     while spy.count() < count and timer.elapsed() < timeout:
                         self.app.processEvents()
                     return spy.count() >= count
-                with patch.dict(os.environ, {"TMPDIR": str(other_tmp), "XDG_RUNTIME_DIR": str(runtime_dir)}):
-                    second = InstanceCoordinator(config_dir)
-                    self.assertEqual(second.server_name, primary.server_name)
-                    self.assertFalse(second.acquire_or_notify("activate"))
-                    self.assertTrue(primary.server.isListening())
-                    if socket_path is not None:
-                        self.assertTrue(socket_path.exists(), "failed lock acquisition must not unlink the active endpoint")
-                    self.assertTrue(wait_for_count(1))
-                    self.assertEqual(spy.at(0), ["activate"])
-                    third = InstanceCoordinator(config_dir)
-                    self.assertEqual(third.server_name, primary.server_name)
-                    self.assertFalse(third.acquire_or_notify("tray"))
-                    self.assertTrue(primary.server.isListening())
-                    self.assertTrue(wait_for_count(2))
-                    self.assertEqual(spy.at(1), ["tray"])
+
+                def notify(command):
+                    result = []
+                    errors = []
+
+                    def worker():
+                        secondary = None
+                        try:
+                            with patch.dict(os.environ, {"TMPDIR": str(other_tmp), "XDG_RUNTIME_DIR": str(runtime_dir)}):
+                                secondary = InstanceCoordinator(config_dir)
+                                self.assertEqual(secondary.server_name, primary.server_name)
+                                result.append(secondary.acquire_or_notify(command))
+                        except Exception as exc:
+                            errors.append(exc)
+                        finally:
+                            if secondary is not None:
+                                secondary.close()
+
+                    thread = threading.Thread(target=worker)
+                    thread.start()
+                    from PySide6.QtCore import QElapsedTimer
+                    timer = QElapsedTimer()
+                    timer.start()
+                    while thread.is_alive() and timer.elapsed() < 3000:
+                        self.app.processEvents()
+                    thread.join(timeout=0.1)
+                    self.assertFalse(thread.is_alive(), "IPC client did not finish within its bounded deadline")
+                    self.assertEqual(errors, [], f"activation count after IPC failure: {spy.count()}")
+                    self.assertEqual(result, [False])
+
+                notify("activate")
+                self.assertTrue(primary.server.isListening())
+                if socket_path is not None:
+                    self.assertTrue(socket_path.exists(), "failed lock acquisition must not unlink the active endpoint")
+                self.assertTrue(wait_for_count(1))
+                self.assertEqual(spy.at(0), ["activate"])
+                notify("tray")
+                self.assertTrue(primary.server.isListening())
+                self.assertTrue(wait_for_count(2))
+                self.assertEqual(spy.at(1), ["tray"])
             finally:
                 if primary is not None:
                     primary.close()
+
+    def test_single_instance_client_accepts_fragmented_ack_after_flushed_write(self):
+        from PySide6.QtNetwork import QLocalSocket
+        from nova_mic_switch.desktop import InstanceCoordinator
+
+        class FakeSocket:
+            def __init__(self):
+                self.connected = False
+                self.response = []
+                self.writes = []
+                self.connect_count = 0
+                self.flush_waits = 0
+
+            def connectToServer(self, _name):
+                self.connect_count += 1
+
+            def waitForConnected(self, _timeout):
+                self.connected = True
+                return True
+
+            def write(self, data):
+                self.writes.append(data)
+                return len(data)
+
+            def flush(self):
+                return True
+
+            def bytesToWrite(self):
+                return 1 if self.flush_waits == 0 else 0
+
+            def waitForBytesWritten(self, _timeout):
+                self.flush_waits += 1
+                return False
+
+            def bytesAvailable(self):
+                return len(self.response[0]) if self.response else 0
+
+            def read(self, _size):
+                return self.response.pop(0)
+
+            def waitForReadyRead(self, _timeout):
+                if not self.response:
+                    self.response.extend((b"O", b"K\n"))
+                return True
+
+            def state(self):
+                return QLocalSocket.LocalSocketState.ConnectedState
+
+            def abort(self):
+                self.connected = False
+
+            def deleteLater(self):
+                pass
+
+        fixture_root = "/tmp/opencode" if sys.platform.startswith("linux") and Path("/tmp/opencode").is_dir() else None
+        with tempfile.TemporaryDirectory(dir=fixture_root) as directory:
+            runtime = Path(directory) / "runtime"
+            runtime.mkdir(mode=0o700)
+            socket = FakeSocket()
+            with patch.dict(os.environ, {"XDG_RUNTIME_DIR": str(runtime)}):
+                coordinator = InstanceCoordinator(Path(directory) / "config")
+                with patch.object(coordinator.lock, "tryLock", return_value=False), \
+                     patch("nova_mic_switch.desktop.QLocalSocket", return_value=socket):
+                    self.assertFalse(coordinator.acquire_or_notify("activate"))
+                self.assertEqual(socket.writes, [b"activate\n"])
+                self.assertEqual(socket.connect_count, 1)
+                self.assertEqual(socket.flush_waits, 1)
+
+    def test_single_instance_client_rejects_invalid_or_missing_ack_without_resending(self):
+        from PySide6.QtNetwork import QLocalSocket
+        from nova_mic_switch.desktop import InstanceCoordinator
+
+        class FakeSocket:
+            def __init__(self, response):
+                self.response = response
+                self.writes = []
+                self.connect_count = 0
+
+            def connectToServer(self, _name):
+                self.connect_count += 1
+
+            def waitForConnected(self, _timeout):
+                return True
+
+            def write(self, data):
+                self.writes.append(data)
+                return len(data)
+
+            def flush(self):
+                return True
+
+            def bytesToWrite(self):
+                return 0
+
+            def bytesAvailable(self):
+                return len(self.response)
+
+            def read(self, _size):
+                data, self.response = self.response, b""
+                return data
+
+            def waitForReadyRead(self, _timeout):
+                return False
+
+            def state(self):
+                return QLocalSocket.LocalSocketState.ConnectedState
+
+            def abort(self):
+                pass
+
+            def deleteLater(self):
+                pass
+
+        fixture_root = "/tmp/opencode" if sys.platform.startswith("linux") and Path("/tmp/opencode").is_dir() else None
+        with tempfile.TemporaryDirectory(dir=fixture_root) as directory:
+            runtime = Path(directory) / "runtime"
+            runtime.mkdir(mode=0o700)
+            with patch.dict(os.environ, {"XDG_RUNTIME_DIR": str(runtime)}):
+                coordinator = InstanceCoordinator(Path(directory) / "config")
+                for response, expected in ((b"NO\n", "invalid acknowledgement"), (b"", "Timed out")):
+                    socket = FakeSocket(response)
+                    tick = [0.0]
+
+                    def monotonic_tick():
+                        tick[0] += 0.5
+                        return tick[0]
+
+                    with self.subTest(response=response), \
+                         patch.object(coordinator.lock, "tryLock", return_value=False), \
+                         patch("nova_mic_switch.desktop.QLocalSocket", return_value=socket), \
+                         patch("nova_mic_switch.desktop.time.monotonic", side_effect=monotonic_tick):
+                        with self.assertRaisesRegex(RuntimeError, expected):
+                            coordinator.acquire_or_notify("tray")
+                        self.assertEqual(socket.writes, [b"tray\n"])
+                        self.assertEqual(socket.connect_count, 1)
+
+    def test_single_instance_client_backs_off_failed_connects_within_deadline(self):
+        from nova_mic_switch.desktop import InstanceCoordinator
+
+        class FakeSocket:
+            def __init__(self, clock):
+                self.clock = clock
+                self.connect_count = 0
+
+            def connectToServer(self, _name):
+                self.connect_count += 1
+
+            def waitForConnected(self, timeout):
+                self.clock[0] += min(timeout / 1000, 0.1)
+                return False
+
+            def abort(self):
+                pass
+
+            def deleteLater(self):
+                pass
+
+        fixture_root = "/tmp/opencode" if sys.platform.startswith("linux") and Path("/tmp/opencode").is_dir() else None
+        with tempfile.TemporaryDirectory(dir=fixture_root) as directory:
+            runtime = Path(directory) / "runtime"
+            runtime.mkdir(mode=0o700)
+            clock = [0.0]
+            sleeps = []
+
+            def fake_sleep(duration):
+                sleeps.append(duration)
+                clock[0] += duration
+
+            with patch.dict(os.environ, {"XDG_RUNTIME_DIR": str(runtime)}):
+                coordinator = InstanceCoordinator(Path(directory) / "config")
+                socket = FakeSocket(clock)
+                with patch.object(coordinator.lock, "tryLock", return_value=False), \
+                     patch("nova_mic_switch.desktop.QLocalSocket", return_value=socket), \
+                     patch("nova_mic_switch.desktop.time.monotonic", side_effect=lambda: clock[0]), \
+                     patch("nova_mic_switch.desktop.time.sleep", side_effect=fake_sleep):
+                    with self.assertRaisesRegex(RuntimeError, "Could not contact the existing"):
+                        coordinator.acquire_or_notify("activate")
+                self.assertGreater(socket.connect_count, 1)
+                self.assertLessEqual(socket.connect_count, 30)
+                self.assertTrue(sleeps)
+                self.assertTrue(all(0 < delay <= 0.02 for delay in sleeps))
+                self.assertLessEqual(clock[0], coordinator._IPC_DEADLINE_SECONDS)
+
+    def test_single_instance_client_fails_if_disconnected_with_pending_write(self):
+        from PySide6.QtNetwork import QLocalSocket
+        from nova_mic_switch.desktop import InstanceCoordinator
+
+        class FakeSocket:
+            def __init__(self):
+                self.writes = []
+                self.connect_count = 0
+                self.write_waits = 0
+
+            def connectToServer(self, _name):
+                self.connect_count += 1
+
+            def waitForConnected(self, _timeout):
+                return True
+
+            def write(self, data):
+                self.writes.append(data)
+                return len(data)
+
+            def flush(self):
+                return True
+
+            def bytesToWrite(self):
+                return 1
+
+            def waitForBytesWritten(self, _timeout):
+                self.write_waits += 1
+                return False
+
+            def state(self):
+                return QLocalSocket.LocalSocketState.UnconnectedState
+
+            def abort(self):
+                pass
+
+            def deleteLater(self):
+                pass
+
+        class SocketFactory:
+            LocalSocketState = QLocalSocket.LocalSocketState
+
+            def __new__(cls):
+                return socket
+
+        fixture_root = "/tmp/opencode" if sys.platform.startswith("linux") and Path("/tmp/opencode").is_dir() else None
+        with tempfile.TemporaryDirectory(dir=fixture_root) as directory:
+            runtime = Path(directory) / "runtime"
+            runtime.mkdir(mode=0o700)
+            with patch.dict(os.environ, {"XDG_RUNTIME_DIR": str(runtime)}):
+                coordinator = InstanceCoordinator(Path(directory) / "config")
+                socket = FakeSocket()
+                with patch.object(coordinator.lock, "tryLock", return_value=False), \
+                     patch("nova_mic_switch.desktop.QLocalSocket", new=SocketFactory):
+                    with self.assertRaisesRegex(RuntimeError, "disconnected while the command was being sent"):
+                        coordinator.acquire_or_notify("tray")
+                self.assertEqual(socket.connect_count, 1)
+                self.assertEqual(socket.writes, [b"tray\n"])
+                self.assertEqual(socket.write_waits, 0)
+
+    def test_single_instance_connection_cleanup_is_explicit_and_idempotent(self):
+        from PySide6.QtNetwork import QLocalSocket
+        from nova_mic_switch.desktop import InstanceCoordinator
+
+        class FakeSocket:
+            def __init__(self, state):
+                self.socket_state = state
+                self.aborts = 0
+                self.deletions = 0
+
+            def state(self):
+                return self.socket_state
+
+            def abort(self):
+                self.aborts += 1
+                self.socket_state = QLocalSocket.LocalSocketState.UnconnectedState
+
+            def deleteLater(self):
+                self.deletions += 1
+
+        class FakeTimer:
+            def __init__(self):
+                self.stops = 0
+
+            def stop(self):
+                self.stops += 1
+
+        fixture_root = "/tmp/opencode" if sys.platform.startswith("linux") and Path("/tmp/opencode").is_dir() else None
+        with tempfile.TemporaryDirectory(dir=fixture_root) as directory:
+            runtime = Path(directory) / "runtime"
+            runtime.mkdir(mode=0o700)
+            with patch.dict(os.environ, {"XDG_RUNTIME_DIR": str(runtime)}):
+                coordinator = InstanceCoordinator(Path(directory) / "config")
+                disconnected = FakeSocket(QLocalSocket.LocalSocketState.UnconnectedState)
+                disconnected_timer = FakeTimer()
+                coordinator._connection_buffers[disconnected] = bytearray()
+                coordinator._connection_timers[disconnected] = disconnected_timer
+                coordinator._discard_connection(disconnected)
+                self.assertEqual((disconnected.aborts, disconnected.deletions, disconnected_timer.stops), (0, 1, 1))
+
+                expired = FakeSocket(QLocalSocket.LocalSocketState.ConnectedState)
+                expired_timer = FakeTimer()
+                coordinator._connection_buffers[expired] = bytearray()
+                coordinator._connection_timers[expired] = expired_timer
+                coordinator._discard_connection(expired, abort=True)
+                coordinator._discard_connection(expired, abort=True)
+                self.assertEqual((expired.aborts, expired.deletions, expired_timer.stops), (1, 1, 1))
+
+                closing = FakeSocket(QLocalSocket.LocalSocketState.ConnectedState)
+                closing_timer = FakeTimer()
+                coordinator._connection_buffers[closing] = bytearray()
+                coordinator._connection_timers[closing] = closing_timer
+                coordinator.primary = True
+                with patch.object(coordinator.lock, "unlock"):
+                    coordinator.close()
+                self.assertEqual((closing.aborts, closing.deletions, closing_timer.stops), (1, 1, 1))
+                self.assertEqual(coordinator._connection_buffers, {})
+                self.assertEqual(coordinator._connection_timers, {})
+
+    def test_single_instance_server_buffers_fragmented_frames_once(self):
+        from PySide6.QtTest import QSignalSpy
+        from nova_mic_switch.desktop import InstanceCoordinator
+
+        class FakeSocket:
+            def __init__(self):
+                self.chunks = []
+                self.acks = []
+                self.aborted = False
+
+            def readAll(self):
+                return self.chunks.pop(0) if self.chunks else b""
+
+            def bytesAvailable(self):
+                return bool(self.chunks)
+
+            def write(self, data):
+                self.acks.append(data)
+                return len(data)
+
+            def flush(self):
+                return True
+
+            def abort(self):
+                self.aborted = True
+
+        fixture_root = "/tmp/opencode" if sys.platform.startswith("linux") and Path("/tmp/opencode").is_dir() else None
+        with tempfile.TemporaryDirectory(dir=fixture_root) as directory:
+            runtime = Path(directory) / "runtime"
+            runtime.mkdir(mode=0o700)
+            with patch.dict(os.environ, {"XDG_RUNTIME_DIR": str(runtime)}):
+                coordinator = InstanceCoordinator(Path(directory) / "config")
+                spy = QSignalSpy(coordinator.activation)
+                socket = FakeSocket()
+                coordinator._connection_buffers[socket] = bytearray()
+                socket.chunks.append(b"act")
+                coordinator._read_connection(socket)
+                self.assertEqual(spy.count(), 0)
+                socket.chunks.append(b"ivate\n")
+                coordinator._read_connection(socket)
+                coordinator._read_connection(socket)
+                self.assertEqual(spy.count(), 1)
+                self.assertEqual(spy.at(0), ["activate"])
+                self.assertEqual(socket.acks, [b"OK\n"])
 
     def test_single_instance_profiles_have_distinct_runtime_endpoints(self):
         from nova_mic_switch.desktop import InstanceCoordinator
