@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       publish:
-        description: Create a GitHub draft release after both platform builds pass
+        description: Create a GitHub draft release after platform and source checks pass
         type: boolean
         required: true
         default: false
@@ -14,7 +14,7 @@ on:
         required: false
         default: ''
       license_reviewed:
-        description: Confirm legal/notice and real-platform review; required to upload public binary artifacts or publish a draft
+        description: Confirm legal/notice and real-platform review; required to upload public binaries/source archive or publish a draft
         type: boolean
         required: true
         default: false
@@ -400,10 +400,86 @@ jobs:
           path: dist/installers/*
           if-no-files-found: error
 
+  corresponding-sources:
+    name: Capture and verify corresponding sources
+    runs-on: ubuntu-22.04
+    needs: [validate-inputs, linux-x86_64, windows-x64]
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.13'
+      - name: Download fresh Linux native evidence
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: native-evidence-linux
+          path: build/native-evidence-linux
+      - name: Capture pinned upstream and exact Ubuntu sources
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/build_source_assets.py --cache-dir build/source-cache --output-dir dist/sources --fetch
+          python scripts/build_ubuntu_sources.py --report-json build/native-evidence-linux/report.json --cache-dir build/ubuntu-source-cache --output-dir dist/ubuntu-sources --fetch
+      - name: Fetch bounded AppImage runtime source archives
+        run: python scripts/fetch_runtime_sources.py --output-dir build/runtime-materials/sources --fetch
+      - name: Build deterministic corresponding-source bundle
+        env:
+          APPLICATION_COMMIT: ${{ github.sha }}
+        run: >-
+          python scripts/build_release_sources.py
+          --upstream-dir dist/sources
+          --ubuntu-dir dist/ubuntu-sources
+          --runtime-dir build/runtime-materials
+          --linux-report build/native-evidence-linux/report.json
+          --output-dir dist/release-sources
+          --application-commit "$APPLICATION_COMMIT"
+          --require-complete
+      - name: Create source-asset checksum set
+        env:
+          RELEASE_VERSION: ${{ needs.validate-inputs.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          base="NovaMicSwitch-$RELEASE_VERSION-Corresponding-Sources"
+          cd dist/release-sources
+          test -s "$base.tar"
+          test -s "$base.tar.sha256"
+          test -s SOURCE-INDEX.md
+          test -s source-bundle-index.json
+          (sha256sum "$base.tar" SOURCE-INDEX.md source-bundle-index.json > SHA256SUMS)
+          sha256sum -c SHA256SUMS
+          sha256sum -c "$base.tar.sha256"
+          test "$(wc -l < SHA256SUMS)" -eq 3
+      - name: Upload source evidence metadata
+        if: ${{ !cancelled() && success() && hashFiles('dist/release-sources/source-bundle-index.json') != '' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: corresponding-source-evidence
+          path: |
+            dist/release-sources/SOURCE-INDEX.md
+            dist/release-sources/source-bundle-index.json
+          if-no-files-found: error
+      - name: Upload corresponding-source release assets
+        if: ${{ inputs.license_reviewed }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: nova-mic-sources
+          path: |
+            dist/release-sources/NovaMicSwitch-${{ needs.validate-inputs.outputs.version }}-Corresponding-Sources.tar
+            dist/release-sources/NovaMicSwitch-${{ needs.validate-inputs.outputs.version }}-Corresponding-Sources.tar.sha256
+            dist/release-sources/SOURCE-INDEX.md
+            dist/release-sources/source-bundle-index.json
+            dist/release-sources/SHA256SUMS
+          if-no-files-found: error
+
   publish-draft:
     name: Create draft GitHub release
     if: ${{ inputs.publish }}
-    needs: [validate-inputs, linux-x86_64, windows-x64]
+    needs: [validate-inputs, linux-x86_64, windows-x64, corresponding-sources]
     runs-on: ubuntu-22.04
     permissions:
       contents: write
@@ -418,6 +494,11 @@ jobs:
         with:
           name: windows-x64
           path: release-assets/windows-x64
+      - name: Download corresponding-source release artifact
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: nova-mic-sources
+          path: release-assets/corresponding-sources
       - name: Verify artifact sets and checksums
         env:
           RELEASE_VERSION: ${{ needs.validate-inputs.outputs.version }}
@@ -427,22 +508,65 @@ jobs:
           version="$RELEASE_VERSION"
           linux="NovaMicSwitch-$version-x86_64.AppImage"
           windows="NovaMicSwitch-Setup-$version.exe"
+          source="NovaMicSwitch-$version-Corresponding-Sources"
           test -s "release-assets/linux-x86_64/$linux"
           test -s "release-assets/linux-x86_64/$linux.sha256"
           test -s release-assets/linux-x86_64/SHA256SUMS
           test -s "release-assets/windows-x64/$windows"
           test -s "release-assets/windows-x64/$windows.sha256"
           test -s release-assets/windows-x64/SHA256SUMS
+          test -s "release-assets/corresponding-sources/$source.tar"
+          test -s "release-assets/corresponding-sources/$source.tar.sha256"
+          test -s "release-assets/corresponding-sources/SOURCE-INDEX.md"
+          test -s "release-assets/corresponding-sources/source-bundle-index.json"
+          test -s "release-assets/corresponding-sources/SHA256SUMS"
           (cd release-assets/linux-x86_64 && sha256sum -c SHA256SUMS)
           (cd release-assets/linux-x86_64 && sha256sum -c "$linux.sha256")
           cmp -s "release-assets/linux-x86_64/$linux.sha256" release-assets/linux-x86_64/SHA256SUMS
           (cd release-assets/windows-x64 && sha256sum -c SHA256SUMS)
           (cd release-assets/windows-x64 && sha256sum -c "$windows.sha256")
           cmp -s "release-assets/windows-x64/$windows.sha256" release-assets/windows-x64/SHA256SUMS
-          cat release-assets/linux-x86_64/SHA256SUMS release-assets/windows-x64/SHA256SUMS > release-assets/SHA256SUMS
-          test "$(wc -l < release-assets/SHA256SUMS)" -eq 2
-          grep -F "$linux" release-assets/SHA256SUMS >/dev/null
-          grep -F "$windows" release-assets/SHA256SUMS >/dev/null
+          (cd release-assets/corresponding-sources && sha256sum -c SHA256SUMS && sha256sum -c "$source.tar.sha256")
+          grep -Eq "^[0-9a-f]{64}  $source.tar$" "release-assets/corresponding-sources/$source.tar.sha256"
+          test "$(wc -l < release-assets/corresponding-sources/SHA256SUMS)" -eq 3
+          grep -F "$source.tar" release-assets/corresponding-sources/SHA256SUMS >/dev/null
+          grep -F 'SOURCE-INDEX.md' release-assets/corresponding-sources/SHA256SUMS >/dev/null
+          grep -F 'source-bundle-index.json' release-assets/corresponding-sources/SHA256SUMS >/dev/null
+          final=release-assets/final
+          if [[ -e "$final" || -L "$final" ]]; then
+            echo "Refusing to reuse existing final asset directory: $final" >&2
+            exit 1
+          fi
+          assets=(
+            "release-assets/linux-x86_64/$linux"
+            "release-assets/linux-x86_64/$linux.sha256"
+            "release-assets/windows-x64/$windows"
+            "release-assets/windows-x64/$windows.sha256"
+            "release-assets/corresponding-sources/$source.tar"
+            "release-assets/corresponding-sources/$source.tar.sha256"
+            release-assets/corresponding-sources/SOURCE-INDEX.md
+            release-assets/corresponding-sources/source-bundle-index.json
+          )
+          basenames=()
+          for asset in "${assets[@]}"; do
+            [[ -f "$asset" && ! -L "$asset" ]] || { echo "Expected regular release asset missing or unsafe: $asset" >&2; exit 1; }
+            basenames+=("$(basename -- "$asset")")
+          done
+          test "$(printf '%s\n' "${basenames[@]}" | sort -u | wc -l)" -eq 8
+          mkdir -- "$final"
+          for i in "${!assets[@]}"; do
+            destination="$final/${basenames[$i]}"
+            [[ ! -e "$destination" && ! -L "$destination" ]] || { echo "Unexpected final asset collision: $destination" >&2; exit 1; }
+            cp -- "${assets[$i]}" "$destination"
+            [[ -f "$destination" && ! -L "$destination" ]] || { echo "Final asset is not a regular file: $destination" >&2; exit 1; }
+          done
+          (
+            cd "$final"
+            sha256sum "${basenames[@]}" > SHA256SUMS
+            test "$(wc -l < SHA256SUMS)" -eq 8
+            test "$(awk '{print $2}' SHA256SUMS | sort -u | wc -l)" -eq 8
+            sha256sum -c SHA256SUMS
+          )
       - name: Create a new draft release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -457,10 +581,14 @@ jobs:
             exit 1
           fi
           gh release create "$RELEASE_TAG" \
-            "release-assets/linux-x86_64/NovaMicSwitch-$RELEASE_VERSION-x86_64.AppImage" \
-            "release-assets/linux-x86_64/NovaMicSwitch-$RELEASE_VERSION-x86_64.AppImage.sha256" \
-            "release-assets/windows-x64/NovaMicSwitch-Setup-$RELEASE_VERSION.exe" \
-            "release-assets/windows-x64/NovaMicSwitch-Setup-$RELEASE_VERSION.exe.sha256" \
-            "release-assets/SHA256SUMS" \
+            "release-assets/final/NovaMicSwitch-$RELEASE_VERSION-x86_64.AppImage" \
+            "release-assets/final/NovaMicSwitch-$RELEASE_VERSION-x86_64.AppImage.sha256" \
+            "release-assets/final/NovaMicSwitch-Setup-$RELEASE_VERSION.exe" \
+            "release-assets/final/NovaMicSwitch-Setup-$RELEASE_VERSION.exe.sha256" \
+            "release-assets/final/NovaMicSwitch-$RELEASE_VERSION-Corresponding-Sources.tar" \
+            "release-assets/final/NovaMicSwitch-$RELEASE_VERSION-Corresponding-Sources.tar.sha256" \
+            "release-assets/final/SOURCE-INDEX.md" \
+            "release-assets/final/source-bundle-index.json" \
+            "release-assets/final/SHA256SUMS" \
             --verify-tag --draft --title "Nova Mic Switch $RELEASE_VERSION" \
-            --notes "First release candidate. Windows GUI smoke and cross-platform unit tests passed in CI; no real Nova HID hardware or end-to-end microphone/audio routing was tested by this workflow. Review platform compatibility, permissions, and third-party notices before publishing this draft."
+            --notes "First release candidate. The corresponding-source bundle and its indexes are attached; review the included scope and limitations. Windows GUI smoke and cross-platform unit tests passed in CI; no real Nova HID hardware or end-to-end microphone/audio routing was tested by this workflow. Review platform compatibility, permissions, and third-party notices before publishing this draft."

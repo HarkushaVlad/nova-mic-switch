@@ -103,7 +103,18 @@ if IS_LINUX:
         output_dir=ROOT / "build" / "linux-system-notices",
     )
     manifest_path = Path(linux_notice_result["manifest"])
-    if not manifest_path.is_absolute() or manifest_path.name != "manifest.json" or manifest_path.is_symlink():
+
+    def _linux_notice_path_has_symlink(path):
+        if not path.is_absolute() or any(part == ".." for part in path.parts):
+            return True
+        cursor = Path(path.anchor)
+        for part in path.parts[1:]:
+            cursor = cursor / part
+            if cursor.is_symlink():
+                return True
+        return False
+
+    if manifest_path.name != "manifest.json" or _linux_notice_path_has_symlink(manifest_path):
         raise SystemExit("Linux notice collector returned an invalid manifest path")
     notice_root = manifest_path.parent.resolve(strict=True)
     generated_files = linux_notice_result["files"]
@@ -114,22 +125,11 @@ if IS_LINUX:
     required_notice_files = {"manifest.json", "THIRD-PARTY-NOTICES.md"}
     for generated_file in generated_files:
         path = Path(generated_file)
-        if not path.is_absolute():
-            raise SystemExit("Linux notice collector returned a non-absolute generated-file path")
-        try:
-            relative = path.relative_to(notice_root)
-        except ValueError as exc:
-            raise SystemExit("Linux notice collector returned a file outside its output root") from exc
-        if any(part in ("", ".", "..") for part in relative.parts) or path.is_symlink():
+        if _linux_notice_path_has_symlink(path):
             raise SystemExit("Linux notice collector returned an unsafe generated-file path")
-        cursor = notice_root
-        for part in relative.parts:
-            cursor = cursor / part
-            if cursor.is_symlink():
-                raise SystemExit("Linux notice output traverses a symlink")
         try:
             resolved = path.resolve(strict=True)
-            resolved.relative_to(notice_root)
+            relative = resolved.relative_to(notice_root)
         except (OSError, ValueError) as exc:
             raise SystemExit("Linux notice output is missing or escapes its output root") from exc
         if not resolved.is_file() or resolved.suffix.lower() not in {".txt", ".json", ".md"}:

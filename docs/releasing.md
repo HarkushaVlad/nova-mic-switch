@@ -28,8 +28,9 @@ Build artifacts include:
 
 - `NovaMicSwitch-VERSION-x86_64.AppImage`
 - `NovaMicSwitch-Setup-VERSION.exe`
-- When distribution is approved: per-platform `SHA256SUMS` and a checksum file
-  alongside each binary; a combined `SHA256SUMS` is attached to a draft release
+- When distribution is approved: the corresponding-source tarball, its
+  `SOURCE-INDEX.md` and `source-bundle-index.json`, per-artifact checksums, and
+  a combined `SHA256SUMS` are attached alongside the binaries
 
 The workflow does not publish automatically. The AppImage tool and Inno Setup
 installer are downloaded only from exact approved
@@ -41,10 +42,21 @@ refresh that digest.
 
 Both platform jobs build, test, smoke-test, and emit bundle/license inventory
 and license-manifest SHA-256 details in their logs even when distribution is
-not approved. Binary artifact uploads are gated separately by the explicit
-`license_reviewed` input. Do not set it until third-party notices and real
-platform testing have been reviewed. With `license_reviewed` false, the run is
-build-only: it uploads no downloadable binaries and cannot publish a draft.
+not approved. A dependent source-capture job downloads the fresh Linux native
+report, captures pinned upstream and exact Ubuntu source packages, verifies the
+three manifest-pinned AppImage runtime source archives, and requires complete
+Linux source-pair coverage with no unknown providers. Runtime-source fetching
+is offline by default; the release job opts into bounded HTTPS retrieval and
+checks each archive against its manifest size and SHA-256.
+
+Source evidence metadata (`SOURCE-INDEX.md` and `source-bundle-index.json`) may
+be uploaded as a separately named CI artifact for review. The source tarball,
+source-asset artifact, and both platform binary artifacts are each gated by the
+explicit `license_reviewed` input. Do not set it until third-party notices and
+real-platform testing have been reviewed. With `license_reviewed` false, no
+source tarball is uploaded and there are no downloadable binaries; a draft
+cannot be published. Draft publication depends on the source job and verifies all
+expected source and binary assets and checksums before creating a draft.
 
 The AppImage runtime is pinned to the official `20251108` x86_64 asset with its
 reviewed SHA-256, 944632-byte size, and source commit recorded in the strict

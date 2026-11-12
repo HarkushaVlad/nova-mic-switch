@@ -19,6 +19,7 @@ from scripts.build_release_sources import (
     MAX_BUNDLE_BYTES,
     ReleaseSourceError,
     _add_file,
+    _assert_output_disjoint,
     build_bundle,
     compare_linux_coverage,
     preflight_tar_size,
@@ -370,8 +371,19 @@ class ReleaseSourceTests(unittest.TestCase):
             output_link.symlink_to(output_target, target_is_directory=True)
         except (OSError, NotImplementedError) as exc:
             self.skipTest(f"symlinks unavailable: {exc}")
-        with self.assertRaisesRegex(ReleaseSourceError, "Unsafe output directory parent"):
-            self.build(output_dir=output_link)
+        with patch("scripts.build_release_sources._canonicalize_for_overlap", side_effect=AssertionError("canonicalized symlink")):
+            with self.assertRaisesRegex(ReleaseSourceError, "Unsafe output directory parent"):
+                self.build(output_dir=output_link)
+
+    def test_input_root_symlink_is_rejected_before_overlap_canonicalization(self) -> None:
+        alias = self.root / "upstream-alias"
+        try:
+            alias.symlink_to(self.fixture["upstream"], target_is_directory=True)
+        except (OSError, NotImplementedError) as exc:
+            self.skipTest(f"symlinks unavailable: {exc}")
+        with patch("scripts.build_release_sources._canonicalize_for_overlap", side_effect=AssertionError("canonicalized symlink")):
+            with self.assertRaisesRegex(ReleaseSourceError, "Symlink in upstream source directory path"):
+                self.build(upstream_dir=alias)
 
     def test_output_equal_to_or_nested_under_an_input_fails_before_creation(self) -> None:
         upstream = self.fixture["upstream"]
@@ -381,6 +393,21 @@ class ReleaseSourceTests(unittest.TestCase):
         with self.assertRaisesRegex(ReleaseSourceError, "overlaps a source input"):
             self.build(output_dir=nested)
         self.assertFalse(nested.exists())
+
+    def test_short_and_long_path_aliases_overlap_after_canonicalization(self) -> None:
+        output_alias = Path("C:/Users/RUNNER~1/source-data/release")
+        input_alias = Path("C:/Users/runneradmin/source-data")
+        aliases = {
+            str(output_alias): Path("C:/Users/runneradmin/source-data/release"),
+            str(input_alias): Path("C:/Users/runneradmin/source-data"),
+        }
+        with patch(
+            "scripts.build_release_sources._canonicalize_for_overlap",
+            side_effect=lambda path: aliases[str(path)],
+        ) as canonicalize:
+            with self.assertRaisesRegex(ReleaseSourceError, "overlaps a source input"):
+                _assert_output_disjoint(output_alias, (input_alias,))
+        self.assertEqual(canonicalize.call_count, 2)
 
     def test_tar_path_and_size_limits(self) -> None:
         with self.assertRaises(ReleaseSourceError):

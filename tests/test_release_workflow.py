@@ -2,8 +2,11 @@ import hashlib
 import json
 import os
 import re
+import shutil
+import subprocess
 import sys
 import tempfile
+import textwrap
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -155,7 +158,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertNotIn("  push:", workflow)
         self.assertIn("      publish:\n", workflow)
         self.assertIn("      license_reviewed:\n", workflow)
-        self.assertIn("needs: [validate-inputs, linux-x86_64, windows-x64]", workflow)
+        self.assertIn("needs: [validate-inputs, linux-x86_64, windows-x64, corresponding-sources]", workflow)
         self.assertIn("needs: [validate-inputs]", workflow)
         self.assertIn("if: ${{ inputs.publish }}", workflow)
         self.assertIn("contents: read", workflow)
@@ -170,6 +173,14 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("appimage-runtime", workflow)
         self.assertIn("6.7.4", (ROOT / "packaging" / "release-tools.json").read_text(encoding="utf-8"))
         self.assertIn("0.13.7", workflow)
+        self.assertIn("  corresponding-sources:\n", workflow)
+        self.assertIn("needs: [validate-inputs, linux-x86_64, windows-x64]", workflow)
+        self.assertIn("scripts/build_source_assets.py --cache-dir build/source-cache --output-dir dist/sources --fetch", workflow)
+        self.assertIn("scripts/build_ubuntu_sources.py --report-json build/native-evidence-linux/report.json", workflow)
+        self.assertIn("scripts/fetch_runtime_sources.py --output-dir build/runtime-materials/sources --fetch", workflow)
+        self.assertIn("--require-complete", workflow)
+        self.assertIn("name: native-evidence-linux", workflow)
+        self.assertIn("name: nova-mic-sources", workflow)
         self.assertIn("ubuntu-22.04", workflow)
         self.assertIn("windows-latest", workflow)
         self.assertIn("Python 3.13", workflow)
@@ -214,7 +225,10 @@ class ReleaseWorkflowTests(unittest.TestCase):
         basenames = [Path(asset).name for asset in assets]
         self.assertEqual(len(basenames), len(set(basenames)))
         self.assertEqual(basenames.count("SHA256SUMS"), 1)
-        self.assertIn("cat release-assets/linux-x86_64/SHA256SUMS release-assets/windows-x64/SHA256SUMS > release-assets/SHA256SUMS", workflow)
+        self.assertEqual(len(assets), 9)
+        self.assertTrue(all(asset.startswith("release-assets/final/") for asset in assets))
+        self.assertIn('sha256sum "${basenames[@]}" > SHA256SUMS', workflow)
+        self.assertIn('"release-assets/corresponding-sources/$source.tar"', workflow)
 
     def test_binary_uploads_require_review_and_linux_installs_only_runner_qt_libraries(self):
         workflow = (ROOT / ".github" / "workflows" / "build-release.yml").read_text(encoding="utf-8")
@@ -224,7 +238,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
             upload_step = workflow[start:end]
             self.assertIn("if: ${{ inputs.license_reviewed }}", upload_step)
             self.assertLess(upload_step.index("if: ${{ inputs.license_reviewed }}"), upload_step.index("uses:"))
-        self.assertEqual(workflow.count("if: ${{ inputs.license_reviewed }}"), 2)
+        self.assertEqual(workflow.count("if: ${{ inputs.license_reviewed }}"), 3)
         linux_job = workflow[workflow.index("  linux-x86_64:"):workflow.index("  windows-x64:")]
         install_step = linux_job.index("Install Linux build and Qt runtime libraries")
         unit_step = linux_job.index("Run unit tests")
@@ -342,6 +356,110 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("With `license_reviewed` false", docs)
         self.assertIn("no downloadable binaries", docs)
 
+    def test_source_workflow_has_separate_metadata_and_review_gated_archive_uploads(self):
+        workflow = (ROOT / ".github" / "workflows" / "build-release.yml").read_text(encoding="utf-8")
+        start = workflow.index("  corresponding-sources:")
+        end = workflow.index("  publish-draft:", start)
+        job = workflow[start:end]
+        self.assertIn("needs: [validate-inputs, linux-x86_64, windows-x64]", job)
+        self.assertIn("name: native-evidence-linux", job)
+        self.assertIn("if: ${{ inputs.license_reviewed }}", job)
+        source_upload = job[job.index("Upload corresponding-source release assets"):]
+        self.assertIn("NovaMicSwitch-${{ needs.validate-inputs.outputs.version }}-Corresponding-Sources.tar", source_upload)
+        metadata_upload = job[job.index("Upload source evidence metadata"):job.index("Upload corresponding-source release assets")]
+        self.assertIn("SOURCE-INDEX.md", metadata_upload)
+        self.assertIn("source-bundle-index.json", metadata_upload)
+        self.assertNotIn(".tar", metadata_upload)
+        self.assertNotIn("dist/release-sources/*", job)
+        self.assertIn("sha256sum -c SHA256SUMS", job)
+
+    def test_runtime_fetch_helper_has_no_unpinned_action_or_release_tool_dependency(self):
+        helper = (ROOT / "scripts" / "fetch_runtime_sources.py").read_text(encoding="utf-8")
+        self.assertIn("MAX_ARCHIVE_BYTES = 100 * 1024 * 1024", helper)
+        self.assertIn("TIMEOUT_SECONDS = 45", helper)
+        self.assertIn("archive_sha256", helper)
+        self.assertIn("archive_bytes", helper)
+        self.assertIn("if not fetch:", helper)
+
+    @unittest.skipUnless(os.name == "posix" and shutil.which("bash") and shutil.which("sha256sum"),
+                         "requires POSIX bash and sha256sum")
+    def test_publisher_verification_stages_flat_assets_and_rejects_bad_inputs(self):
+        workflow = (ROOT / ".github" / "workflows" / "build-release.yml").read_text(encoding="utf-8")
+        step_start = workflow.index("      - name: Verify artifact sets and checksums")
+        run_start = workflow.index("        run: |\n", step_start) + len("        run: |\n")
+        step_end = workflow.index("      - name:", run_start)
+        script = textwrap.dedent(workflow[run_start:step_end])
+        self.assertNotIn("gh release", script)
+        version = "0.1.0"
+        linux = f"NovaMicSwitch-{version}-x86_64.AppImage"
+        windows = f"NovaMicSwitch-Setup-{version}.exe"
+        source = f"NovaMicSwitch-{version}-Corresponding-Sources"
+        names = [linux, f"{linux}.sha256", windows, f"{windows}.sha256",
+                 f"{source}.tar", f"{source}.tar.sha256", "SOURCE-INDEX.md", "source-bundle-index.json"]
+
+        def create_fixture(root, *, missing=None, tamper_source_sum=False, corrupt_source=False):
+            groups = {
+                "linux-x86_64": [linux, f"{linux}.sha256"],
+                "windows-x64": [windows, f"{windows}.sha256"],
+                "corresponding-sources": [f"{source}.tar", f"{source}.tar.sha256", "SOURCE-INDEX.md", "source-bundle-index.json"],
+            }
+            for group, files in groups.items():
+                directory = root / "release-assets" / group
+                directory.mkdir(parents=True)
+                for name in files:
+                    (directory / name).write_bytes(f"fixture payload for {name}\n".encode())
+            for group, binary in (("linux-x86_64", linux), ("windows-x64", windows)):
+                directory = root / "release-assets" / group
+                sidecar = f"{hashlib.sha256((directory / binary).read_bytes()).hexdigest()}  {binary}\n"
+                (directory / f"{binary}.sha256").write_text(sidecar, encoding="ascii")
+                (directory / "SHA256SUMS").write_text(sidecar, encoding="ascii")
+            directory = root / "release-assets" / "corresponding-sources"
+            source_tar = f"{source}.tar"
+            sidecar = f"{hashlib.sha256((directory / source_tar).read_bytes()).hexdigest()}  {source_tar}\n"
+            (directory / f"{source_tar}.sha256").write_text(sidecar, encoding="ascii")
+            records = []
+            for name in (source_tar, "SOURCE-INDEX.md", "source-bundle-index.json"):
+                digest = hashlib.sha256((directory / name).read_bytes()).hexdigest()
+                if tamper_source_sum and name == "SOURCE-INDEX.md":
+                    digest = "0" * 64
+                records.append(f"{digest}  {name}\n")
+            (directory / "SHA256SUMS").write_text("".join(records), encoding="ascii")
+            if corrupt_source:
+                (directory / source_tar).write_bytes(b"tampered archive\n")
+            if missing:
+                for group, files in groups.items():
+                    if missing in files:
+                        (root / "release-assets" / group / missing).unlink()
+
+        def run_script(root):
+            return subprocess.run(["bash", "-c", script], cwd=root,
+                                  env={**os.environ, "RELEASE_VERSION": version},
+                                  text=True, capture_output=True, timeout=10)
+
+        temp_dir = "/tmp/opencode" if Path("/tmp/opencode").is_dir() else None
+        with tempfile.TemporaryDirectory(dir=temp_dir) as temp:
+            root = Path(temp)
+            create_fixture(root)
+            result = run_script(root)
+            self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+            final = root / "release-assets" / "final"
+            self.assertEqual({path.name for path in final.iterdir()}, set(names) | {"SHA256SUMS"})
+            lines = (final / "SHA256SUMS").read_text(encoding="ascii").splitlines()
+            self.assertEqual(len(lines), 8)
+            self.assertEqual({line.split(maxsplit=1)[1] for line in lines}, set(names))
+            self.assertTrue(all("/" not in line.split(maxsplit=1)[1] for line in lines))
+            verify = subprocess.run(["sha256sum", "-c", "SHA256SUMS"], cwd=final,
+                                    text=True, capture_output=True, check=False)
+            self.assertEqual(verify.returncode, 0, verify.stderr + verify.stdout)
+
+        for options in ({"missing": linux}, {"tamper_source_sum": True}, {"corrupt_source": True}):
+            with self.subTest(**options), tempfile.TemporaryDirectory(dir=temp_dir) as temp:
+                root = Path(temp)
+                create_fixture(root, **options)
+                result = run_script(root)
+                self.assertNotEqual(result.returncode, 0, result.stdout)
+                self.assertFalse((root / "release-assets" / "final").exists())
+
     def test_frozen_media_probe_runs_with_bounded_timeouts_and_is_metadata_only(self):
         workflow = (ROOT / ".github" / "workflows" / "build-release.yml").read_text(encoding="utf-8")
         linux_job = workflow[workflow.index("  linux-x86_64:"):workflow.index("  windows-x64:")]
@@ -357,7 +475,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("build/native-evidence/windows/media-probe.json", windows_job)
         self.assertIn("license_reviewed:", workflow)
         self.assertIn("default: false", workflow)
-        self.assertEqual(workflow.count("if: ${{ inputs.license_reviewed }}"), 2)
+        self.assertEqual(workflow.count("if: ${{ inputs.license_reviewed }}"), 3)
         for upload in (linux_job, windows_job):
             self.assertIn("build/native-evidence/report.json", upload)
             self.assertIn("build/native-evidence/notices/**/*.txt", upload)

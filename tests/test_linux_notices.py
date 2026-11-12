@@ -49,9 +49,11 @@ class LinuxNoticeTests(unittest.TestCase):
             entries = []
             contents = [("libfixture1_amd64-copyright.txt", self.copyright_bytes)]
             for reference in sorted(set(collector.NOTICE_REFERENCE.findall(self.copyright_bytes.decode("utf-8")))):
-                common = self.commonroot / reference
-                if common.is_file():
-                    contents.append((f"libfixture1_amd64-common-{reference}.txt", common.read_bytes()))
+                common = next((candidate for candidate in self.commonroot.iterdir()
+                               if candidate.name == reference and candidate.is_file()), None)
+                if common is not None:
+                    safe_reference = collector.native_report._safe_notice_name(reference)
+                    contents.append((f"libfixture1_amd64-common-{safe_reference}.txt", common.read_bytes()))
             for filename, content in contents:
                 destination = notice_dir / filename
                 if not destination.exists():

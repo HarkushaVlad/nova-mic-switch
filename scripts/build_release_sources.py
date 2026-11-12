@@ -50,6 +50,7 @@ PROJECT_FILES = (
     "scripts/native_report.py",
     "scripts/release_tools.py",
     "scripts/build_release_sources.py",
+    "scripts/fetch_runtime_sources.py",
 )
 
 EXECUTABLE_PROJECT_FILES = frozenset(
@@ -149,6 +150,19 @@ def _paths_overlap(left: Path, right: Path) -> bool:
         return True
     except ValueError:
         return False
+
+
+def _canonicalize_for_overlap(path: Path) -> Path:
+    """Resolve existing path aliases while retaining any nonexistent output tail."""
+    return path.resolve(strict=False)
+
+
+def _assert_output_disjoint(output_path: Path, input_roots: Iterable[Path]) -> None:
+    canonical_output = _canonicalize_for_overlap(output_path)
+    for input_root in input_roots:
+        canonical_input = _canonicalize_for_overlap(input_root)
+        if _paths_overlap(canonical_output, canonical_input):
+            raise ReleaseSourceError(f"Output directory overlaps a source input: {input_root}")
 
 
 def _open_regular(root: Path, rel: str, label: str) -> tuple[BinaryIO, os.stat_result]:
@@ -655,9 +669,7 @@ def build_bundle(
             info = component.lstat()
             if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
                 raise ReleaseSourceError(f"Unsafe output directory parent: {component}")
-    for input_root in (upstream_dir, ubuntu_dir, runtime_dir, report_parent):
-        if _paths_overlap(output_abs, input_root):
-            raise ReleaseSourceError(f"Output directory overlaps a source input: {input_root}")
+    _assert_output_disjoint(output_abs, (upstream_dir, ubuntu_dir, runtime_dir, report_parent))
     output_dir.parent.mkdir(parents=True, exist_ok=True)
     if output_dir.exists() or output_dir.is_symlink():
         _root_dir(output_dir, "output directory")

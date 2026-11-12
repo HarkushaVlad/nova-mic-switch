@@ -63,7 +63,8 @@ class PackagingDefinitionTests(unittest.TestCase):
         (licenses_dir / "ffmpeg-9.0.1/ffmpeg-license.txt").write_text("ffmpeg fixture", encoding="utf-8")
         linux_notice_tmp = tempfile.TemporaryDirectory(prefix="nova-linux-notices-", dir=TEST_TEMP_DIR)
         self.addCleanup(linux_notice_tmp.cleanup)
-        linux_notices_dir = Path(linux_notice_tmp.name)
+        linux_notices_dir = Path(linux_notice_tmp.name) / "Notice Output Alias Fixture"
+        linux_notices_dir.mkdir()
         package_notice = linux_notices_dir / "notices/package/libsample1-copyright.txt"
         package_notice.parent.mkdir(parents=True)
         package_notice.write_text("fixture Ubuntu copyright text\n", encoding="utf-8")
@@ -73,6 +74,18 @@ class PackagingDefinitionTests(unittest.TestCase):
         linux_notice_manifest.write_text(json.dumps({"schema": 1, "source_packages": [{"name": "sample", "version": "1"}],
                                                      "texts": [{"path": "notices/package/libsample1-copyright.txt"}]}),
                                         encoding="utf-8")
+
+        def windows_short_path(path):
+            if os.name != "nt":
+                return path
+            import ctypes
+
+            buffer = ctypes.create_unicode_buffer(32768)
+            length = ctypes.windll.kernel32.GetShortPathNameW(str(path), buffer, len(buffer))
+            if not length or length >= len(buffer):
+                return path
+            return Path(buffer.value)
+
         (licenses_dir / "manifest.json").write_text(
             json.dumps({"texts": [
                 {"destination": "sample-license.txt"},
@@ -103,8 +116,9 @@ class PackagingDefinitionTests(unittest.TestCase):
 
         def fake_collect_linux_notices(*, toc_rows, output_dir):
             linux_notice_calls.append((list(toc_rows), Path(output_dir)))
-            return {"manifest": str(linux_notice_manifest),
-                    "files": [str(linux_notice_manifest), str(linux_notice_index), str(package_notice)]}
+            return {"manifest": str(windows_short_path(linux_notice_manifest)),
+                    "files": [str(windows_short_path(path))
+                              for path in (linux_notice_manifest, linux_notice_index, package_notice)]}
 
         linux_notice_module.collect_linux_notices = fake_collect_linux_notices
         namespace = {

@@ -1,5 +1,6 @@
 import hashlib
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -75,7 +76,10 @@ class NativeReportTests(unittest.TestCase):
         shipped = self.bundle / "_internal" / "libQt6Core.so.6"
         shipped.parent.mkdir(parents=True)
         shipped.write_bytes(b"host library")
-        canonical_source = Path("/usr/lib/x86_64-linux-gnu/libQt6Core.so.6")
+        canonical_source = self.root / "host" / "usr/lib/x86_64-linux-gnu/libQt6Core.so.6"
+        canonical_source.parent.mkdir(parents=True)
+        canonical_source.write_bytes(b"canonical host library fixture")
+        canonical_source = canonical_source.resolve()
         self.write_toc("Analysis-00.toc", (("libQt6Core.so.6", str(canonical_source), "BINARY"),))
         host = {
             "provider": {"name": "libqt6core6:amd64", "version": "6.8.2", "kind": "system-package"},
@@ -152,7 +156,10 @@ class NativeReportTests(unittest.TestCase):
         source = prefix / "Lib" / "site-packages" / "vendor.dll"
         source.parent.mkdir(parents=True)
         source.write_bytes(b"unowned vendor binary")
-        runtime_source = base_prefix / "lib" / "python3.13" / "lib-dynload" / "_runtime.so"
+        if os.name == "nt":
+            runtime_source = base_prefix / "DLLs" / "_runtime.pyd"
+        else:
+            runtime_source = base_prefix / "lib" / "python3.13" / "lib-dynload" / "_runtime.so"
         with patch.object(native_report.sys, "prefix", str(prefix)), \
              patch.object(native_report.sys, "base_prefix", str(base_prefix)):
             provider = native_report._provider_for(source, "vendor.dll", {}, self.output, {})
@@ -336,6 +343,39 @@ class NativeReportTests(unittest.TestCase):
         self.assertEqual(len(loaded_paths), 7)
         self.assertEqual(len(functions), 15)
         self.assertTrue(all(function.argtypes == [] for function in functions))
+
+    def test_ffmpeg_evidence_normalizes_bundle_and_library_paths_before_relative_mapping(self):
+        import ctypes
+
+        long_bundle = self.root / "Native Report Bundle Alias Fixture"
+        long_bundle.mkdir()
+        library = long_bundle / "libavutil.so.60"
+        library.write_bytes(b"fixture native library")
+        if os.name == "nt":
+            short_path = ctypes.create_unicode_buffer(32768)
+            length = ctypes.windll.kernel32.GetShortPathNameW(
+                str(long_bundle), short_path, len(short_path),
+            )
+            if not length or length >= len(short_path) or Path(short_path.value) == long_bundle:
+                self.skipTest("Windows short-path aliases are unavailable")
+            bundle_alias = Path(short_path.value)
+        else:
+            bundle_alias = self.root / "bundle-short-alias"
+            try:
+                bundle_alias.symlink_to(long_bundle, target_is_directory=True)
+            except OSError:
+                self.skipTest("Directory symlinks are unavailable")
+
+        discovered = [{"prefix": "avutil", "path": str(library.resolve())}]
+        child_response = {"results": [{"relative_path": "libavutil.so.60", "probe_kind": "raw_library_probe",
+                                       "library_loaded": False, "load_error": "fixture"}]}
+        with patch.object(native_report, "_ffmpeg_bundle_paths", return_value=discovered), \
+             patch.object(native_report, "_ffmpeg_probe_subprocess", return_value=child_response) as probe:
+            evidence = native_report._ffmpeg_evidence(bundle_alias)
+        self.assertEqual(probe.call_args.args[0], long_bundle.resolve())
+        self.assertEqual(probe.call_args.args[1][0]["path"], str(library.resolve()))
+        self.assertEqual(evidence[0]["path"], "libavutil.so.60")
+        self.assertEqual(evidence[0]["load_error"], "fixture")
 
     def test_ffmpeg_probe_subprocess_success_timeout_bad_json_and_child_failure(self):
         path = self.bundle / "libavutil.so.60"

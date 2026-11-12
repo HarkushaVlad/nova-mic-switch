@@ -524,29 +524,36 @@ def _ffmpeg_probe_subprocess(bundle: Path, libraries: list[dict[str, str]]) -> d
 
 
 def _ffmpeg_evidence(bundle: Path) -> list[dict]:
-    libraries = _ffmpeg_bundle_paths(bundle)
-    if not libraries:
+    bundle = Path(bundle).resolve(strict=True)
+    discovered = _ffmpeg_bundle_paths(bundle)
+    if not discovered:
         return []
+    libraries = []
+    relative_paths = {}
+    for entry in discovered:
+        path = Path(entry["path"]).resolve(strict=True)
+        relative = path.relative_to(bundle).as_posix()
+        if not path.is_file():
+            raise ValueError("FFmpeg bundle library path is not a regular file")
+        canonical_entry = {**entry, "path": str(path)}
+        libraries.append(canonical_entry)
+        relative_paths[relative] = canonical_entry
     response = _ffmpeg_probe_subprocess(bundle, libraries)
     if "error" in response:
         return [
             {
-                "path": Path(entry["path"]).relative_to(bundle).as_posix(),
+                "path": relative,
                 "probe_kind": "raw_library_probe",
                 "load_error": response["error"],
             }
-            for entry in libraries
+            for relative, entry in relative_paths.items()
         ]
-    expected = {
-        Path(entry["path"]).relative_to(bundle).as_posix(): entry
-        for entry in libraries
-    }
     received = {}
     for result in response["results"]:
-        if isinstance(result, dict) and result.get("relative_path") in expected:
+        if isinstance(result, dict) and result.get("relative_path") in relative_paths:
             received[result["relative_path"]] = result
     evidence = []
-    for relative_path in expected:
+    for relative_path in relative_paths:
         result = received.get(relative_path)
         if result is None:
             result = {
