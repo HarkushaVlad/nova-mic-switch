@@ -17,6 +17,7 @@ ArchitecturesInstallIn64BitMode=x64
 OutputDir=..\..\dist\installers
 OutputBaseFilename=NovaMicSwitch-Setup-{#AppVersion}
 UninstallDisplayIcon={app}\{#AppExe}
+LicenseFile=..\..\dist\windows\NovaMicSwitch\_internal\licenses\windows-runtime\TERMS.txt
 ; This installer is per-user and does not require elevation.
 
 [Tasks]
@@ -32,6 +33,18 @@ Name: "{group}\Uninstall Nova Mic Switch"; Filename: "{uninstallexe}"
 [Registry]
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "NovaMicSwitch"; ValueData: """{app}\{#AppExe}"" --tray"; Tasks: startup; Flags: uninsdeletevalue
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: none; ValueName: "NovaMicSwitch"; Tasks: not startup; Flags: deletevalue
+
+[Code]
+function InitializeSetup(): Boolean;
+begin
+  if WizardSilent and (ExpandConstant('{param:ACCEPTMICROSOFTRUNTIMETERMS|0}') <> '1') then
+  begin
+    Log('Silent installation requires explicit Microsoft runtime terms acceptance: /ACCEPTMICROSOFTRUNTIMETERMS=1');
+    Result := False;
+  end
+  else
+    Result := True;
+end;
 
 [Run]
 Filename: "{app}\{#AppExe}"; Parameters: "--tray"; Description: "Launch Nova Mic Switch"; Flags: postinstall nowait skipifsilent

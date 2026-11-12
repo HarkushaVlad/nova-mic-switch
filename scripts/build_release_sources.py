@@ -40,6 +40,8 @@ PROJECT_FILES = (
     "packaging/icons/nova-mic-switch.ico",
     "packaging/windows/installer.iss",
     "packaging/windows/native_policy.py",
+    "packaging/windows/runtime_terms.py",
+    "packaging/windows/MICROSOFT-RUNTIME-TERMS.txt",
     "scripts/build_appimage.sh",
     "scripts/build_linux.sh",
     "scripts/build_windows.ps1",
@@ -408,6 +410,91 @@ def _load_project_version(repo_root: Path) -> str:
     return match.group(1)
 
 
+def _collect_runtime_additional_material(
+    repo_root: Path,
+    files: list[InputFile],
+    paths: set[str],
+    manifest: dict[str, Any],
+) -> None:
+    """Include the pinned type2 root LICENSE from its tracked curated copy."""
+    records = manifest.get("additional_materials")
+    if not isinstance(records, list) or len(records) != 1 or not isinstance(records[0], dict):
+        raise ReleaseSourceError("AppImage runtime manifest must declare exactly the supported type2 root LICENSE copy")
+    record = records[0]
+    ref = "dd6cebedcbddde9c82f89b011e8e1d40b6e43868"
+    archive_name = "type2-runtime-dd6cebe.tar.gz"
+    member_name = f"type2-runtime-{ref}/LICENSE"
+    relative = "packaging/licenses/appimage-runtime/type2-runtime/LICENSE"
+    filename = "type2-runtime-LICENSE.raw"
+    source_url = f"https://raw.githubusercontent.com/AppImage/type2-runtime/{ref}/LICENSE"
+    source_archive_url = f"https://github.com/AppImage/type2-runtime/archive/{ref}.tar.gz"
+    expected_additional_path = f"build/runtime-materials/sources/{filename}"
+    expected_archive_path = f"build/runtime-materials/sources/{archive_name}"
+
+    if (record.get("filename") != filename
+            or record.get("path") != expected_additional_path
+            or record.get("url") != source_url
+            or record.get("ref") != ref
+            or record.get("version") != "same commit as type2-runtime"
+            or record.get("matches_archive_root_LICENSE") is not True):
+        raise ReleaseSourceError("AppImage additional material is not the pinned type2 root LICENSE provenance record")
+    safe_relative(record["filename"], "AppImage material filename")
+    safe_relative(record["path"], "AppImage additional material path")
+
+    source_records = manifest.get("sources")
+    if not isinstance(source_records, list):
+        raise ReleaseSourceError("AppImage runtime manifest has no source archive records")
+    matching_archives = [
+        source for source in source_records
+        if isinstance(source, dict) and source.get("filename") == archive_name
+    ]
+    if len(matching_archives) != 1:
+        raise ReleaseSourceError("Expected exactly one pinned type2 runtime source archive record")
+    archive_record = matching_archives[0]
+    archive_digest = archive_record.get("archive_sha256")
+    archive_size = archive_record.get("archive_bytes")
+    if (archive_record.get("url") != source_archive_url
+            or archive_record.get("ref") != ref
+            or archive_record.get("archive_path") != expected_archive_path
+            or not isinstance(archive_digest, str)
+            or not re.fullmatch(r"[0-9a-f]{64}", archive_digest)
+            or type(archive_size) is not int or archive_size <= 0):
+        raise ReleaseSourceError("Type2 runtime archive pin does not match the additional LICENSE provenance")
+
+    copied_texts = manifest.get("copied_texts")
+    if not isinstance(copied_texts, list):
+        raise ReleaseSourceError("AppImage runtime manifest has no copied_texts list")
+    matching_texts = [
+        text for text in copied_texts
+        if isinstance(text, dict)
+        and text.get("archive") == archive_name
+        and text.get("original_member_path") == member_name
+    ]
+    if len(matching_texts) != 1:
+        raise ReleaseSourceError("Expected one copied_texts record for the pinned type2 archive-root LICENSE")
+    copied = matching_texts[0]
+    digest = copied.get("sha256")
+    size = copied.get("bytes")
+    if (copied.get("destination") != relative
+            or not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest)
+            or type(size) is not int or size <= 0
+            or record.get("sha256") != digest or record.get("bytes") != size):
+        raise ReleaseSourceError("Additional type2 LICENSE identity/hash/size does not match its curated copied_texts record")
+
+    _add_file(
+        files,
+        paths,
+        repo_root,
+        relative,
+        f"runtime/texts/{filename}",
+        "runtime_notice",
+        source_url,
+        expected_sha256=digest,
+        expected_size=size,
+        text=True,
+    )
+
+
 def _collect_notices(repo_root: Path, files: list[InputFile], paths: set[str]) -> list[dict[str, Any]]:
     summary: list[dict[str, Any]] = []
     for group, manifest_path, collection_key in NOTICE_GROUPS:
@@ -507,27 +594,7 @@ def _collect_notices(repo_root: Path, files: list[InputFile], paths: set[str]) -
         summary.append({"group": group, "manifest_sha256": hashlib.sha256(raw).hexdigest(), "text_material_count": group_count})
 
         if group == "appimage-runtime":
-            additional = manifest.get("additional_materials", [])
-            for record in additional:
-                rel = record.get("path")
-                name = record.get("filename")
-                if not isinstance(rel, str) or not isinstance(name, str):
-                    raise ReleaseSourceError("Invalid AppImage additional material")
-                rel = safe_relative(rel, "AppImage additional material")
-                if not rel.startswith("build/runtime-materials/sources/"):
-                    raise ReleaseSourceError(f"Unexpected AppImage additional material path: {rel}")
-                _add_file(
-                    files,
-                    paths,
-                    repo_root,
-                    rel,
-                    f"runtime/texts/{safe_relative(name, 'AppImage material filename')}",
-                    "runtime_notice",
-                    record.get("url", "AppImage runtime manifest"),
-                    expected_sha256=record.get("sha256"),
-                    expected_size=record.get("bytes"),
-                    text=True,
-                )
+            _collect_runtime_additional_material(repo_root, files, paths, manifest)
     return summary
 
 
@@ -958,7 +1025,7 @@ def _source_markdown(index: dict[str, Any]) -> str:
     for item in index["upstream_source_assets"]:
         basis = item["verification_basis"].replace("|", "\\|")
         lines.append(f"| `{item['filename']}` | {item['version']} | {item['size_bytes']} | `{item['sha256']}` | {basis} |")
-    lines.extend(["", "## Gaps and limits", "", "- The current Linux report contains unresolved native providers; see `source-bundle-index.json` for counts and exact pair comparisons.", "- Windows/Qt, AppImage runtime, and other license coverage require separate legal review; this archive does not mark those scopes complete.", "- No staged archive is extracted or executed during bundle creation.", ""])
+    lines.extend(["", "## Gaps and limits", "", "- See `source-bundle-index.json` for Linux provider counts, missing source pairs, and exact pair comparisons.", "- Windows/Qt, AppImage runtime, and other license coverage require separate legal review; this archive does not mark those scopes complete.", "- No staged archive is extracted or executed during bundle creation.", ""])
     return "\n".join(lines)
 
 

@@ -68,6 +68,10 @@ try {
         $env:PATH = $InheritedPath
     }
     $Bundle = Join-Path $Root 'dist\windows\NovaMicSwitch'
+    $RuntimeVerifier = Join-Path $Root 'packaging\windows\runtime_terms.py'
+    $RuntimeManifest = Join-Path $Root 'build\windows-runtime-terms\manifest.json'
+    & $Python $RuntimeVerifier verify --bundle $Bundle --manifest $RuntimeManifest
+    if ($LASTEXITCODE -ne 0) { throw "Microsoft runtime bundle verification failed with exit code $LASTEXITCODE" }
     Write-Output "Windows bundle created at $Bundle"
 
     if ($Compiler) {

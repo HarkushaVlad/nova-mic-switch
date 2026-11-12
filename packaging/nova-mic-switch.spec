@@ -156,6 +156,56 @@ if IS_WINDOWS and os.name == "nt":
 
     apply_windows_native_policy(a, ROOT, ROOT / ".venv", Path(sys.base_prefix))
 
+    runtime_terms_path = ROOT / "packaging" / "windows" / "runtime_terms.py"
+    runtime_terms_spec = importlib.util.spec_from_file_location("nova_windows_runtime_terms", runtime_terms_path)
+    runtime_terms_module = importlib.util.module_from_spec(runtime_terms_spec)
+    runtime_terms_spec.loader.exec_module(runtime_terms_module)
+    runtime_terms_result = runtime_terms_module.collect_microsoft_runtime_terms(
+        toc_rows=a.binaries + a.datas,
+        evidence_path=ROOT / "build" / "native-evidence-windows.json",
+        template_path=ROOT / "packaging" / "windows" / "MICROSOFT-RUNTIME-TERMS.txt",
+        output_dir=ROOT / "build" / "windows-runtime-terms",
+        python_base=Path(sys.base_prefix),
+        venv_root=ROOT / ".venv",
+    )
+    runtime_manifest = Path(runtime_terms_result["manifest"])
+    runtime_root = (ROOT / "build" / "windows-runtime-terms").resolve(strict=True)
+    if runtime_manifest.name != "manifest.json" or runtime_manifest.is_symlink():
+        raise SystemExit("Microsoft runtime terms helper returned an invalid manifest")
+    runtime_files = runtime_terms_result.get("files")
+    if not isinstance(runtime_files, list):
+        raise SystemExit("Microsoft runtime terms helper returned an invalid file list")
+    runtime_data_rows = []
+    runtime_relpaths = set()
+    required_runtime_files = {"manifest.json", "TERMS.txt"}
+    for runtime_file in runtime_files:
+        path = Path(runtime_file)
+        if not path.is_absolute() or any(part == ".." for part in path.parts):
+            raise SystemExit("Microsoft runtime terms helper returned an unsafe path")
+        cursor = Path(path.anchor)
+        for part in path.parts[1:]:
+            cursor = cursor / part
+            if cursor.is_symlink():
+                raise SystemExit("Microsoft runtime terms output traverses a symlink")
+        try:
+            resolved = path.resolve(strict=True)
+            relative = resolved.relative_to(runtime_root)
+        except (OSError, ValueError) as exc:
+            raise SystemExit("Microsoft runtime terms output is missing or outside its output root") from exc
+        relative_name = relative.as_posix()
+        if relative_name not in required_runtime_files or relative_name in runtime_relpaths:
+            raise SystemExit("Microsoft runtime terms helper returned an unexpected or duplicate path")
+        if not resolved.is_file() or resolved.stat().st_size == 0:
+            raise SystemExit("Microsoft runtime terms helper returned an empty or non-file output")
+        runtime_relpaths.add(relative_name)
+        destination = (Path("licenses") / "windows-runtime" / relative).as_posix()
+        runtime_data_rows.append((destination, str(resolved), "DATA"))
+    if runtime_relpaths != required_runtime_files or runtime_manifest.resolve(strict=True) not in {
+        Path(row[1]) for row in runtime_data_rows
+    }:
+        raise SystemExit("Microsoft runtime terms helper omitted its manifest or terms")
+    a.datas.extend(runtime_data_rows)
+
 pyz = PYZ(a.pure)
 exe = EXE(
     pyz,

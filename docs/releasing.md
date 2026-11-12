@@ -24,6 +24,13 @@ newer local distribution is not evidence that the resulting AppImage runs on
 older supported systems. Windows builds and frozen-executable smoke checks run
 on the Windows CI runner; they are not validated by a Linux local build.
 
+The Windows installer displays the bundled Microsoft runtime terms on its
+interactive license page. Silent installation is refused unless the caller
+explicitly supplies `/ACCEPTMICROSOFTRUNTIMETERMS=1`; this acknowledges those
+terms and is not an application license or a substitute for reviewing the
+third-party notices. Runtime DLL version-resource details in the bundle record
+file provenance only and do not independently grant redistribution rights.
+
 Build artifacts include:
 
 - `NovaMicSwitch-VERSION-x86_64.AppImage`

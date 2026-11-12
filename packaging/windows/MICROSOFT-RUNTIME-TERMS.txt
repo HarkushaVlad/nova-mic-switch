@@ -1,0 +1,79 @@
+MICROSOFT RUNTIME COMPONENT TERMS
+Authored by the Nova Mic Switch publisher
+
+1. Scope and acceptance
+
+These are component-specific terms authored by the Nova Mic Switch publisher, not a Microsoft-issued agreement. They apply ONLY to the unmodified Microsoft Visual C++ runtime components expressly identified in the appended verified inventory ("Runtime Components"). Accepting these terms does not establish that you hold or have accepted a Visual Studio license.
+
+Nova Mic Switch's own code remains MIT-licensed. All other components retain their respective licenses. These terms impose no additional restrictions on that code or those components, including Qt, other LGPL-covered libraries, library replacement, or reverse engineering to debug modifications to LGPL-covered libraries.
+
+2. Permitted use and distribution
+
+Subject to applicable permissions, you may use the Runtime Components with the upstream Python/Qt components included within Nova Mic Switch.
+
+You may further distribute the application bundle containing the unmodified Runtime Components only where the applicable Microsoft Distributable Code permissions and upstream application-distributor permission authorize that distribution. Require your distributors and external end users to agree to these protective terms, and preserve the inventory and accompanying notices.
+
+These terms do not independently grant Microsoft intellectual-property rights, establish an upstream permission not otherwise available, or authorize standalone distribution of the Runtime Components. They do not transfer any Microsoft agreement.
+
+3. Runtime-specific restrictions
+
+Except where applicable law or applicable third-party licensing terms provide otherwise, and subject to the expressly permitted bundle distribution above, you must not:
+
+- Modify or rename the Runtime Components.
+- Remove, minimize, block, or modify notices of Microsoft or its suppliers.
+- Work around technical limitations in the Runtime Components.
+- Use the Runtime Components in any way that is against the law.
+- Provide the Runtime Components as a standalone offering.
+- Rent, lease, or lend the Runtime Components, or purport to transfer a Microsoft agreement.
+
+No Microsoft trademark rights are granted. Do not use Microsoft trademarks in application names or suggest that Microsoft supplies or endorses Nova Mic Switch.
+
+You must comply with applicable domestic and international export laws and regulations, including restrictions on destinations, end users, and end use.
+
+4. Reverse engineering and reserved rights
+
+The following protection is quoted from the Microsoft Visual Studio Community 2022 license's Scope of License provisions. For these publisher terms, "the software" in this quotation means only the Runtime Components:
+
+"reverse engineer, decompile or disassemble the software, or otherwise attempt to derive the source code for the software, except and only to the extent required by third party licensing terms governing use of certain open source components that may be included with the software"
+
+This restriction does not override applicable law granting greater rights. It does not restrict inspection, replacement, modification, or reverse engineering of separately licensed components where their licenses permit those activities.
+
+Microsoft and its suppliers retain their intellectual-property rights. No rights beyond applicable licenses and permissions are granted.
+
+5. Publisher distribution conditions
+
+The publisher must add significant primary functionality in the application, distribute no components or runtimes marked "Preview", "Pre-release", or "Beta", no Insiders Channel or Unreleased Components, avoid misleading Microsoft trademark use, and satisfy the applicable Distributable Code conditions.
+
+This section describes selected existing distribution obligations; it is not an exhaustive statement of any applicable upstream agreement. It does not incorporate a Visual Studio agreement, assert anyone's acceptance of such an agreement, or itself create a new personal indemnity obligation.
+
+The publisher must not modify or distribute Microsoft Distributable Code source so that it becomes subject to an "Excluded License": one requiring, as a condition of use, modification, or distribution, disclosure or distribution in source form, or rights for others to modify it. This condition does not relicense Nova Mic Switch's MIT code or separately licensed LGPL components.
+
+6. Microsoft warranty and damages protections
+
+The following protections are quoted from the Microsoft Visual Studio Community 2022 license and apply here only to the Runtime Components:
+
+"The software is licensed 'as-is'. You bear the risk of using it. Microsoft gives no express warranties, guarantees or conditions. To the extent permitted under your local laws, Microsoft excludes the implied warranties of merchantability, fitness for a particular purpose and non-infringement."
+
+"You can recover from Microsoft and its suppliers only direct damages up to U.S. $5.00. You cannot recover any other damages, including consequential, lost profits, special, indirect or incidental damages."
+
+"This limitation applies to (a) anything related to the software, services, content (including code) on third party Internet sites, or third party applications; and (b) claims for breach of contract, breach of warranty, guarantee or condition, strict liability, negligence, or other tort to the extent permitted by applicable law."
+
+"It also applies even if Microsoft knew or should have known about the possibility of the damages. The above limitation or exclusion may not apply to you because your state or country may not allow the exclusion or limitation of incidental, consequential or other damages."
+
+These quotations create no additional Microsoft warranty or remedy. Mandatory consumer rights remain unaffected.
+
+7. Official references
+
+Microsoft Visual Studio Community 2022 license, especially Distributable Code and Scope of License:
+https://visualstudio.microsoft.com/license-terms/vs2022-ga-community/
+
+Official Distributable List:
+https://learn.microsoft.com/en-us/visualstudio/releases/2022/redistribution
+
+Microsoft Visual Studio Community 2026 license and Distributable List:
+https://visualstudio.microsoft.com/license-terms/vs2026-ga-community/
+https://learn.microsoft.com/en-us/visualstudio/releases/2026/redistribution
+
+These contextual references do not establish which agreement an upstream supplier accepted and are not incorporated as personal agreements by accepting these component terms.
+
+The verified Runtime Components inventory follows.

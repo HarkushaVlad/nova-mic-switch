@@ -126,6 +126,51 @@ class PackagingDefinitionTests(unittest.TestCase):
                               for path in (linux_notice_manifest, linux_notice_index, package_notice)]}
 
         linux_notice_module.collect_linux_notices = fake_collect_linux_notices
+        runtime_terms_calls = []
+        runtime_fixture_files = []
+
+        class RuntimeTermsLoader:
+            def create_module(self, _spec):
+                return None
+
+            def exec_module(self, module):
+                def collect_microsoft_runtime_terms(**kwargs):
+                    runtime_terms_calls.append(kwargs)
+                    output_dir = Path(kwargs["output_dir"])
+                    output_dir.mkdir(parents=True, exist_ok=True)
+                    runtime_manifest = output_dir / "manifest.json"
+                    runtime_terms_file = output_dir / "TERMS.txt"
+                    for path, content in ((runtime_manifest, '{"schema_version": 1}\n'),
+                                          (runtime_terms_file, "fixture runtime terms\n")):
+                        if not path.exists():
+                            path.write_text(content, encoding="utf-8")
+                            runtime_fixture_files.append(path)
+                    return {"manifest": str(runtime_manifest),
+                            "files": [str(runtime_manifest), str(runtime_terms_file)]}
+
+                module.collect_microsoft_runtime_terms = collect_microsoft_runtime_terms
+
+        runtime_terms_spec = importlib.util.spec_from_loader(
+            "nova_windows_runtime_terms", RuntimeTermsLoader(),
+        )
+        real_spec_from_file_location = importlib.util.spec_from_file_location
+
+        def cleanup_runtime_fixture_files():
+            for path in reversed(runtime_fixture_files):
+                path.unlink(missing_ok=True)
+            for parent in {path.parent for path in runtime_fixture_files}:
+                try:
+                    parent.rmdir()
+                except OSError:
+                    pass
+
+        self.addCleanup(cleanup_runtime_fixture_files)
+
+        def spec_from_file_location(name, path, *args, **kwargs):
+            if name == "nova_windows_runtime_terms":
+                return runtime_terms_spec
+            return real_spec_from_file_location(name, path, *args, **kwargs)
+
         namespace = {
             "SPECPATH": str(ROOT / "packaging"),
             "Analysis": FakeAnalysis,
@@ -142,6 +187,7 @@ class PackagingDefinitionTests(unittest.TestCase):
             metadata_calls.clear()
             policy_calls.clear()
             linux_notice_calls.clear()
+            runtime_terms_calls.clear()
             namespace.update({"__file__": str(ROOT / "packaging/nova-mic-switch.spec")})
             with patch.object(sys, "platform", platform), patch.dict(
                 sys.modules,
@@ -153,7 +199,7 @@ class PackagingDefinitionTests(unittest.TestCase):
                     "native_policy": native_policy,
                     "collect_linux_notices": linux_notice_module,
                 },
-            ):
+            ), patch.object(importlib.util, "spec_from_file_location", side_effect=spec_from_file_location):
                 exec(compile(source, namespace["__file__"], "exec"), namespace)
 
             scripts, kwargs = captures[0]
@@ -164,6 +210,7 @@ class PackagingDefinitionTests(unittest.TestCase):
             self.assertNotIn(other_backend, kwargs["hiddenimports"])
             self.assertEqual(kwargs["binaries"], [])
             self.assertEqual(len(policy_calls), int(platform == "win32" and os.name == "nt"))
+            self.assertEqual(len(runtime_terms_calls), int(platform == "win32" and os.name == "nt"))
             self.assertEqual(len(linux_notice_calls), int(platform == "linux"))
             datas = namespace["a"].datas
             binary_names = [row[0].lower() for row in namespace["a"].binaries]
@@ -188,6 +235,8 @@ class PackagingDefinitionTests(unittest.TestCase):
                                 for source, destination in normalized_license_datas))
             linux_notice_datas = [row for row in datas if isinstance(row, tuple) and len(row) == 3
                                   and str(row[0]).replace("\\", "/").startswith("licenses/linux-system/")]
+            windows_runtime_datas = [row for row in datas if isinstance(row, tuple) and len(row) == 3
+                                     and str(row[0]).replace("\\", "/").startswith("licenses/windows-runtime/")]
             if platform == "linux":
                 rows, requested_output = linux_notice_calls[0]
                 self.assertEqual(requested_output, ROOT / "build/linux-system-notices")
@@ -205,6 +254,20 @@ class PackagingDefinitionTests(unittest.TestCase):
                     self.assertEqual(typecode, "DATA")
             else:
                 self.assertEqual(linux_notice_datas, [])
+            if platform == "win32" and os.name == "nt":
+                runtime_output = Path(runtime_terms_calls[0]["output_dir"])
+                runtime_manifest = runtime_output / "manifest.json"
+                runtime_terms_file = runtime_output / "TERMS.txt"
+                self.assertEqual(set(windows_runtime_datas), {
+                    ("licenses/windows-runtime/manifest.json", str(runtime_manifest.resolve()), "DATA"),
+                    ("licenses/windows-runtime/TERMS.txt", str(runtime_terms_file.resolve()), "DATA"),
+                })
+                runtime_kwargs = runtime_terms_calls[0]
+                self.assertEqual(runtime_kwargs["toc_rows"], namespace["a"].binaries + [
+                    row for row in namespace["a"].datas if row not in windows_runtime_datas
+                ])
+            else:
+                self.assertEqual(windows_runtime_datas, [])
             self.assertEqual(
                 metadata_calls,
                 ["PySide6", "PySide6_Essentials", "PySide6_Addons", "shiboken6", "hidapi", "pyinstaller"],
@@ -250,6 +313,27 @@ class PackagingDefinitionTests(unittest.TestCase):
         self.assertIn('ValueType: none; ValueName: "NovaMicSwitch"; Tasks: not startup; Flags: deletevalue', source)
         self.assertNotIn("deletekey", source.lower())
         self.assertIn('Parameters: "--tray"', source)
+
+    def test_installer_has_builtin_runtime_terms_acceptance_and_silent_guard(self):
+        source = (ROOT / "packaging/windows/installer.iss").read_text(encoding="utf-8")
+        self.assertIn(
+            "LicenseFile=..\\..\\dist\\windows\\NovaMicSwitch\\_internal\\licenses\\windows-runtime\\TERMS.txt",
+            source,
+        )
+        self.assertIn("function InitializeSetup(): Boolean;", source)
+        self.assertIn("WizardSilent", source)
+        self.assertIn("{param:ACCEPTMICROSOFTRUNTIMETERMS|0}", source)
+        self.assertIn("<> '1'", source)
+        self.assertLess(source.index("function InitializeSetup"), source.index("[Run]"))
+        self.assertIn("/ACCEPTMICROSOFTRUNTIMETERMS=1", source)
+
+    def test_windows_build_verifies_collected_bundle_before_installer(self):
+        source = (ROOT / "scripts/build_windows.ps1").read_text(encoding="utf-8")
+        verify = source.index("$RuntimeVerifier verify")
+        installer = source.index("& $Compiler")
+        self.assertLess(verify, installer)
+        self.assertIn("build\\windows-runtime-terms\\manifest.json", source)
+        self.assertIn("$Bundle", source[verify - 80:verify + 120])
 
     def test_build_scripts_target_only_native_platform_and_bundle_paths(self):
         linux = (ROOT / "scripts/build_linux.sh").read_text(encoding="utf-8")

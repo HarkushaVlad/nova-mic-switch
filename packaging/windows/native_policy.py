@@ -13,6 +13,10 @@ QT_OPENSSL_PLUGIN = "qopensslbackend.dll"
 QT_SCHANNEL_PLUGIN = "qschannelbackend.dll"
 OS_PROVIDED_DLLS = ("api-ms-win-", "ext-ms-win-")
 NATIVE_TYPES = {"BINARY", "EXTENSION", "EXECUTABLE"}
+MICROSOFT_RUNTIME_DLLS = {
+    "vcruntime140.dll", "vcruntime140_1.dll", "msvcp140.dll", "msvcp140_1.dll",
+    "msvcp140_2.dll", "msvcp140_atomic_wait.dll", "msvcp140_codecvt_ids.dll", "concrt140.dll",
+}
 
 
 def canonical_windows_path(path):
@@ -111,7 +115,7 @@ def apply_windows_native_policy(analysis, project_root, venv_root, python_base):
 def _write_evidence(rows, project_root):
     selected = {
         "libcrypto-3.dll", "libcrypto-3-x64.dll", "libssl-3.dll", "libssl-3-x64.dll",
-        "libffi-8.dll", "vcruntime140.dll", "vcruntime140_1.dll", "msvcp140.dll",
+        "libffi-8.dll", "opengl32sw.dll", "mesa.dll", *MICROSOFT_RUNTIME_DLLS,
     }
     evidence = []
     for row in rows:
@@ -135,12 +139,19 @@ def _write_evidence(rows, project_root):
             powershell = os.path.join(os.environ["SystemRoot"], "System32", "WindowsPowerShell", "v1.0", "powershell.exe")
             child_env = os.environ.copy()
             child_env["NOVA_DLL_EVIDENCE_PATH"] = os.path.abspath(source)
-            command = [powershell, "-NoProfile", "-NonInteractive", "-Command", "(Get-Item -LiteralPath $env:NOVA_DLL_EVIDENCE_PATH).VersionInfo | ConvertTo-Json -Compress"]
-            result = subprocess.run(command, capture_output=True, text=True, check=True, timeout=10, env=child_env)
+            metadata_command = (
+                "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); "
+                "(Get-Item -LiteralPath $env:NOVA_DLL_EVIDENCE_PATH).VersionInfo | ConvertTo-Json -Compress"
+            )
+            command = [powershell, "-NoProfile", "-NonInteractive", "-Command", metadata_command]
+            result = subprocess.run(
+                command, capture_output=True, text=True, encoding="utf-8", errors="strict",
+                check=True, timeout=10, env=child_env,
+            )
             metadata = json.loads(result.stdout)
             if not isinstance(metadata, dict):
                 raise ValueError("PowerShell version metadata was not an object")
-        except (OSError, subprocess.SubprocessError, json.JSONDecodeError, KeyError, ValueError) as error:
+        except (OSError, subprocess.SubprocessError, UnicodeError, json.JSONDecodeError, KeyError, ValueError) as error:
             raise RuntimeError(f"Could not read native DLL version metadata: {source}: {error}") from error
         item = {
             "destination": str(row[0]), "source": os.path.abspath(source),
@@ -148,9 +159,12 @@ def _write_evidence(rows, project_root):
             "machine": f"0x{machine:04x}",
             "company": metadata.get("CompanyName"), "product": metadata.get("ProductName"),
             "file_version": metadata.get("FileVersion"),
+            "legal_copyright": metadata.get("LegalCopyright"),
+            "is_debug": metadata.get("IsDebug"),
+            "is_pre_release": metadata.get("IsPreRelease"),
         }
         evidence.append(item)
-        print(json.dumps(item, sort_keys=True), flush=True)
+        print(json.dumps(item, sort_keys=True, ensure_ascii=False), flush=True)
     output = Path(project_root) / "build" / "native-evidence-windows.json"
     output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(json.dumps(evidence, indent=2) + "\n", encoding="utf-8")
+    output.write_text(json.dumps(evidence, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")

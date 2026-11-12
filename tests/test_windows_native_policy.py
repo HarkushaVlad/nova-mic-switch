@@ -1,6 +1,7 @@
 import tempfile
 import unittest
 import importlib.util
+import json
 from pathlib import Path
 import sys
 from types import SimpleNamespace
@@ -158,6 +159,75 @@ class WindowsNativePolicyTests(unittest.TestCase):
         self.assertIn("$env:PATH = $InheritedPath", script)
         self.assertLess(script.index("$env:PATH = $AllowedPath"), script.index("& $Python -m PyInstaller"))
         self.assertLess(script.index("& $Python -m PyInstaller"), script.index("$env:PATH = $InheritedPath"))
+
+    def test_evidence_selects_standard_microsoft_runtime_set_and_adds_version_metadata(self):
+        self.assertEqual(POLICY.MICROSOFT_RUNTIME_DLLS, {
+            "vcruntime140.dll", "vcruntime140_1.dll", "msvcp140.dll", "msvcp140_1.dll",
+            "msvcp140_2.dll", "msvcp140_atomic_wait.dll", "msvcp140_codecvt_ids.dll", "concrt140.dll",
+        })
+        rows = []
+        for name in sorted(POLICY.MICROSOFT_RUNTIME_DLLS):
+            path = self.root / name
+            path.write_bytes(b"synthetic PE fixture")
+            rows.append((name, str(path), "BINARY"))
+
+        class FakePE:
+            FILE_HEADER = SimpleNamespace(Machine=0x8664)
+
+            def __init__(self, *_args, **_kwargs):
+                pass
+
+            def close(self):
+                pass
+
+        fake_pefile = SimpleNamespace(PE=FakePE, PEFormatError=Exception)
+        metadata = {
+            "CompanyName": "Microsoft Corporation", "ProductName": "Microsoft® Visual Studio®",
+            "FileVersion": "14.40.33810.0", "LegalCopyright": "Copyright © Microsoft Corporation.",
+            "IsDebug": False, "IsPreRelease": False,
+        }
+        completed = SimpleNamespace(stdout=json.dumps(metadata, ensure_ascii=False))
+        with patch.dict(sys.modules, {"pefile": fake_pefile}), \
+             patch.object(POLICY.subprocess, "run", return_value=completed) as run, \
+             patch.dict(POLICY.os.environ, {"SystemRoot": str(self.root)}):
+            POLICY._write_evidence(rows, self.root)
+            expected_powershell = str(self.root / "System32" / "WindowsPowerShell" / "v1.0" / "powershell.exe")
+            for invocation in run.call_args_list:
+                command = invocation.args[0]
+                self.assertEqual(command[0], expected_powershell)
+                self.assertTrue(Path(command[0]).is_absolute())
+                self.assertIn("[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false);", command[-1])
+                self.assertTrue(command[-1].endswith(
+                    "(Get-Item -LiteralPath $env:NOVA_DLL_EVIDENCE_PATH).VersionInfo | ConvertTo-Json -Compress"
+                ))
+                self.assertEqual(invocation.kwargs["encoding"], "utf-8")
+                self.assertEqual(invocation.kwargs["errors"], "strict")
+                self.assertEqual(invocation.kwargs["timeout"], 10)
+                self.assertTrue(invocation.kwargs["capture_output"])
+                self.assertTrue(invocation.kwargs["text"])
+                self.assertTrue(invocation.kwargs["check"])
+                self.assertEqual(
+                    invocation.kwargs["env"]["NOVA_DLL_EVIDENCE_PATH"],
+                    str(rows[run.call_args_list.index(invocation)][1]),
+                )
+        evidence_path = self.root / "build" / "native-evidence-windows.json"
+        evidence_bytes = evidence_path.read_bytes()
+        self.assertIn("Microsoft® Visual Studio®".encode("utf-8"), evidence_bytes)
+        self.assertIn("Copyright © Microsoft Corporation.".encode("utf-8"), evidence_bytes)
+        records = json.loads(evidence_bytes.decode("utf-8"))
+        self.assertEqual({Path(row["destination"]).name.casefold() for row in records}, POLICY.MICROSOFT_RUNTIME_DLLS)
+        for item in records:
+            self.assertEqual(item["product"], "Microsoft® Visual Studio®")
+            self.assertEqual(item["legal_copyright"], "Copyright © Microsoft Corporation.")
+            self.assertIs(item["is_debug"], False)
+            self.assertIs(item["is_pre_release"], False)
+        previous_evidence = evidence_path.read_bytes()
+        with patch.dict(sys.modules, {"pefile": fake_pefile}), \
+             patch.object(POLICY.subprocess, "run", side_effect=UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid byte")), \
+             patch.dict(POLICY.os.environ, {"SystemRoot": str(self.root)}):
+            with self.assertRaisesRegex(RuntimeError, "Could not read native DLL version metadata"):
+                POLICY._write_evidence(rows, self.root)
+        self.assertEqual(evidence_path.read_bytes(), previous_evidence)
 
 
 if __name__ == "__main__":

@@ -135,16 +135,19 @@ def make_fixture(root: Path, *, unresolved: bool = False) -> dict[str, Path]:
 
     runtime_records = []
     runtime_assets = [
-        ("runtime-a.tar.gz", b"runtime a"),
+        ("type2-runtime-dd6cebe.tar.gz", b"runtime a"),
         ("runtime-b.tar.xz", b"runtime b"),
         ("runtime-c.tar.gz", b"runtime c"),
     ]
     for filename, data in runtime_assets:
         rel = f"sources/{filename}"
         _write(runtime / rel, data)
+        type2_ref = "dd6cebedcbddde9c82f89b011e8e1d40b6e43868"
+        type2 = filename == "type2-runtime-dd6cebe.tar.gz"
         runtime_records.append({
             "filename": filename,
-            "url": f"https://example.invalid/{filename}",
+            "url": f"https://github.com/AppImage/type2-runtime/archive/{type2_ref}.tar.gz" if type2 else f"https://example.invalid/{filename}",
+            **({"ref": type2_ref} if type2 else {}),
             "archive_path": f"build/runtime-materials/{rel}",
             "archive_bytes": len(data),
             "archive_sha256": _sha(data),
@@ -159,6 +162,10 @@ def make_fixture(root: Path, *, unresolved: bool = False) -> dict[str, Path]:
     qt6_notice = notice("packaging/licenses/qt-6.12.0/LICENSE.txt", b"qt6 notice\n")
     ff_notice = notice("packaging/licenses/ffmpeg-9.0.1/LICENSE.txt", b"ffmpeg notice\n")
     runtime_notice = notice("packaging/licenses/appimage-runtime/LICENSE.txt", b"runtime notice\n")
+    type2_license = notice(
+        "packaging/licenses/appimage-runtime/type2-runtime/LICENSE",
+        b"fixture type2 archive-root LICENSE\n",
+    )
     win_notice = notice("packaging/licenses/windows-native/LICENSE.txt", b"windows notice\n")
     permissive_rel = "packaging/licenses/appimage-runtime/permissive/zlib/LICENSE"
     permissive_notice = notice(permissive_rel, b"zlib notice\n")
@@ -169,8 +176,24 @@ def make_fixture(root: Path, *, unresolved: bool = False) -> dict[str, Path]:
     _write_json(project / "packaging/licenses/appimage-runtime/manifest.json", {
         "schema_version": 1,
         "sources": runtime_records,
-        "copied_texts": [runtime_notice],
-        "additional_materials": [],
+        "copied_texts": [
+            runtime_notice,
+            {
+                **{key: value for key, value in type2_license.items() if key != "source_url"},
+                "archive": "type2-runtime-dd6cebe.tar.gz",
+                "original_member_path": f"type2-runtime-{type2_ref}/LICENSE",
+            },
+        ],
+        "additional_materials": [{
+            "filename": "type2-runtime-LICENSE.raw",
+            "url": f"https://raw.githubusercontent.com/AppImage/type2-runtime/{type2_ref}/LICENSE",
+            "ref": type2_ref,
+            "version": "same commit as type2-runtime",
+            "path": "build/runtime-materials/sources/type2-runtime-LICENSE.raw",
+            "bytes": type2_license["bytes"],
+            "sha256": type2_license["sha256"],
+            "matches_archive_root_LICENSE": True,
+        }],
     })
     _write_json(project / "packaging/licenses/appimage-runtime/permissive/manifest.json", {
         "materials": [{"path": "zlib/LICENSE", "sha256": permissive_notice["sha256"], "size_bytes": permissive_notice["bytes"]}]
@@ -234,10 +257,17 @@ class ReleaseSourceTests(unittest.TestCase):
             self.assertIn("upstream/qt-everywhere-src-6.12.0.tar.xz", names)
             self.assertIn("ubuntu/sources/" + "1" * 64 + "/libfixture_1.0.orig.tar.xz", names)
             self.assertIn("source-bundle-index.json", names)
+            self.assertIn("runtime/texts/type2-runtime-LICENSE.raw", names)
+            self.assertFalse(list(self.fixture["runtime"].rglob("*.raw")))
+            curated = archive.extractfile("project/packaging/licenses/appimage-runtime/type2-runtime/LICENSE")
+            additional = archive.extractfile("runtime/texts/type2-runtime-LICENSE.raw")
+            self.assertEqual(curated.read(), additional.read())
             self.assertTrue(all(m.mtime == 0 and m.uid == 0 and m.gid == 0 and m.uname == "" and m.gname == "" for m in members))
             self.assertTrue(all(m.isfile() for m in members))
             by_name = {member.name: member for member in members}
             self.assertIn("project/scripts/collect_linux_notices.py", by_name)
+            self.assertIn("project/packaging/windows/runtime_terms.py", by_name)
+            self.assertIn("project/packaging/windows/MICROSOFT-RUNTIME-TERMS.txt", by_name)
             self.assertEqual(by_name["project/packaging/linux/AppRun"].mode, 0o755)
             self.assertEqual(by_name["project/scripts/build_appimage.sh"].mode, 0o755)
             self.assertEqual(by_name["project/scripts/build_linux.sh"].mode, 0o755)
@@ -253,6 +283,75 @@ class ReleaseSourceTests(unittest.TestCase):
                 self.assertEqual(archive.extractfile(copied).read(), archive.extractfile(curated).read())
         checksum = Path(str(first["archive"]) + ".sha256").read_text(encoding="ascii")
         self.assertEqual(checksum, f"{first['archive_sha256']}  {archive_path.name}\n")
+
+    def test_runtime_additional_license_uses_tracked_curated_copy_without_network_or_raw_cache(self) -> None:
+        with patch.object(urllib.request, "urlopen", side_effect=AssertionError("network access")), patch.object(
+            socket, "create_connection", side_effect=AssertionError("network access")
+        ):
+            result = self.build()
+        self.assertFalse(list(self.fixture["runtime"].rglob("*.raw")))
+        with tarfile.open(str(result["archive"]), "r:") as archive:
+            self.assertEqual(
+                archive.extractfile("runtime/texts/type2-runtime-LICENSE.raw").read(),
+                archive.extractfile("project/packaging/licenses/appimage-runtime/type2-runtime/LICENSE").read(),
+            )
+        index = json.loads((self.fixture["output"] / "source-bundle-index.json").read_text(encoding="utf-8"))
+        additional = next(row for row in index["files"] if row["path"] == "runtime/texts/type2-runtime-LICENSE.raw")
+        self.assertEqual(additional["source"], "https://raw.githubusercontent.com/AppImage/type2-runtime/dd6cebedcbddde9c82f89b011e8e1d40b6e43868/LICENSE")
+
+    def test_runtime_additional_license_provenance_tampering_fails_closed(self) -> None:
+        mutation_cases = (
+            ("sha256", lambda row: row.__setitem__("sha256", "0" * 64)),
+            ("bytes", lambda row: row.__setitem__("bytes", row["bytes"] + 1)),
+            ("matches_archive_root_LICENSE", lambda row: row.__setitem__("matches_archive_root_LICENSE", False)),
+            ("url", lambda row: row.__setitem__("url", "https://example.invalid/LICENSE")),
+            ("ref", lambda row: row.__setitem__("ref", "a" * 40)),
+            ("path", lambda row: row.__setitem__("path", "build/runtime-materials/sources/../outside.raw")),
+            ("original_member_path", lambda row: row.__setitem__("original_member_path", "other/LICENSE")),
+        )
+        for field, mutate in mutation_cases:
+            with self.subTest(field=field), tempfile.TemporaryDirectory() as temp:
+                fixture = make_fixture(Path(temp))
+                manifest_path = fixture["project"] / "packaging/licenses/appimage-runtime/manifest.json"
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+                if field == "original_member_path":
+                    mutate(manifest["copied_texts"][1])
+                else:
+                    mutate(manifest["additional_materials"][0])
+                _write_json(manifest_path, manifest)
+                with patch.object(urllib.request, "urlopen", side_effect=AssertionError("network access")):
+                    with self.assertRaises(ReleaseSourceError):
+                        build_bundle(
+                            upstream_dir=fixture["upstream"], ubuntu_dir=fixture["ubuntu"],
+                            runtime_dir=fixture["runtime"], output_dir=fixture["output"],
+                            linux_report=fixture["report"], application_commit=COMMIT,
+                            repo_root=fixture["project"],
+                        )
+
+    def test_unknown_additional_runtime_material_is_not_silently_ignored(self) -> None:
+        manifest_path = self.fixture["project"] / "packaging/licenses/appimage-runtime/manifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["additional_materials"].append({"filename": "unexpected.raw"})
+        _write_json(manifest_path, manifest)
+        with self.assertRaisesRegex(ReleaseSourceError, "exactly the supported type2 root LICENSE"):
+            self.build()
+
+    def test_runtime_additional_license_requires_exact_pinned_archive_identity(self) -> None:
+        for field, value in (("url", "https://example.invalid/archive.tar.gz"), ("ref", "b" * 40)):
+            with self.subTest(field=field), tempfile.TemporaryDirectory() as temp:
+                fixture = make_fixture(Path(temp))
+                manifest_path = fixture["project"] / "packaging/licenses/appimage-runtime/manifest.json"
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+                archive_record = next(row for row in manifest["sources"] if row["filename"] == "type2-runtime-dd6cebe.tar.gz")
+                archive_record[field] = value
+                _write_json(manifest_path, manifest)
+                with self.assertRaises(ReleaseSourceError):
+                    build_bundle(
+                        upstream_dir=fixture["upstream"], ubuntu_dir=fixture["ubuntu"],
+                        runtime_dir=fixture["runtime"], output_dir=fixture["output"],
+                        linux_report=fixture["report"], application_commit=COMMIT,
+                        repo_root=fixture["project"],
+                    )
 
     def test_unknown_provider_blocks_require_complete_but_is_reported(self) -> None:
         fixture = make_fixture(self.root / "unknown", unresolved=True)

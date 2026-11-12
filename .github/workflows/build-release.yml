@@ -327,6 +327,107 @@ jobs:
       - name: Build Windows onedir bundle and installer
         shell: pwsh
         run: .\scripts\build_windows.ps1 -InnoSetupCompiler $env:INNO_SETUP_COMPILER
+      - name: Verify installer refuses silent runtime terms acceptance
+        shell: pwsh
+        run: |
+          $Version = & .\.venv\Scripts\python.exe -c 'import tomllib; print(tomllib.loads(open("pyproject.toml", "rb").read().decode())["project"]["version"])'
+          if ($LASTEXITCODE -ne 0 -or $Version -notmatch '^\d+\.\d+\.\d+(?:[-+][A-Za-z0-9.-]+)?$') { throw "Could not resolve a safe installer version: $Version" }
+          $Installer = Join-Path $env:GITHUB_WORKSPACE "dist\installers\NovaMicSwitch-Setup-$Version.exe"
+          if (-not (Test-Path -LiteralPath $Installer -PathType Leaf)) { throw "Expected just-built installer missing: $Installer" }
+
+          $RefusalRoot = Join-Path $env:GITHUB_WORKSPACE 'build\installer-refusal'
+          $InstallDirectory = [System.IO.Path]::GetFullPath((Join-Path $RefusalRoot 'must-not-exist'))
+          $InstallerLog = Join-Path $RefusalRoot 'installer-refusal.log'
+          if (Test-Path -LiteralPath $RefusalRoot) { throw "Refusing to reuse installer-refusal directory: $RefusalRoot" }
+          if (Test-Path -LiteralPath $InstallDirectory) { throw "Refusing to use pre-existing test install directory: $InstallDirectory" }
+          if (Test-Path -LiteralPath $InstallerLog) { throw "Refusing to overwrite installer test log: $InstallerLog" }
+          New-Item -ItemType Directory -Path $RefusalRoot | Out-Null
+
+          $RunKeyPath = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
+          function Get-NovaMicSwitchRunValue {
+            $value = Get-ItemPropertyValue -LiteralPath $RunKeyPath -Name 'NovaMicSwitch' -ErrorAction SilentlyContinue
+            $properties = Get-ItemProperty -LiteralPath $RunKeyPath -Name 'NovaMicSwitch' -ErrorAction SilentlyContinue
+            $present = $null -ne $properties -and $properties.PSObject.Properties.Match('NovaMicSwitch').Count -gt 0
+            return @{ Present = $present; Value = $value }
+          }
+          $RunValueBefore = Get-NovaMicSwitchRunValue
+
+          $QuotedLog = '"' + $InstallerLog.Replace('"', '\"') + '"'
+          $QuotedInstallDirectory = '"' + $InstallDirectory.Replace('"', '\"') + '"'
+          $Arguments = @(
+            '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-', '/NOICONS',
+            '/TASKS=!startup', "/LOG=$QuotedLog", "/DIR=$QuotedInstallDirectory"
+          )
+          $Process = Start-Process -FilePath $Installer -ArgumentList $Arguments -PassThru -WindowStyle Hidden
+          if (-not $Process.WaitForExit(30000)) {
+            Stop-Process -Id $Process.Id -Force -ErrorAction SilentlyContinue
+            $Process.WaitForExit(5000) | Out-Null
+            throw 'Installer refusal test exceeded 30 seconds; terminated only its owned installer process.'
+          }
+          $Process.Refresh()
+          $InstallerExitCode = [int]$Process.ExitCode
+          $RefusalMarker = 'Silent installation requires explicit Microsoft runtime terms acceptance'
+          $MarkerFound = $false
+          if (Test-Path -LiteralPath $InstallerLog -PathType Leaf) {
+            $InstallerLogText = Get-Content -LiteralPath $InstallerLog -Raw
+            $MarkerFound = $InstallerLogText.Contains($RefusalMarker, [System.StringComparison]::Ordinal)
+          }
+          $InstallDirectoryCreated = Test-Path -LiteralPath $InstallDirectory
+          $RunValueAfter = Get-NovaMicSwitchRunValue
+          $RunValueUnchanged = ($RunValueBefore.Present -eq $RunValueAfter.Present) -and
+            (-not $RunValueBefore.Present -or [System.Object]::Equals($RunValueBefore.Value, $RunValueAfter.Value))
+          $RefusalFailures = @()
+          if ($InstallerExitCode -eq 0) { $RefusalFailures += 'Installer unexpectedly returned success.' }
+          if (-not $MarkerFound) { $RefusalFailures += "Installer log lacks the exact refusal marker: $RefusalMarker" }
+          if ($InstallDirectoryCreated) { $RefusalFailures += 'Installer created the must-not-exist installation directory.' }
+          if (-not $RunValueUnchanged) { $RefusalFailures += 'HKCU Run NovaMicSwitch value changed during refusal test.' }
+          if ($RefusalFailures.Count -gt 0) { throw ($RefusalFailures -join ' ') }
+
+          $BundleTermsRoot = Join-Path $env:GITHUB_WORKSPACE 'dist\windows\NovaMicSwitch\_internal\licenses\windows-runtime'
+          $EvidenceRoot = Join-Path $env:GITHUB_WORKSPACE 'build\native-evidence\windows-runtime'
+          if (Test-Path -LiteralPath $EvidenceRoot) { throw "Refusing to overwrite Windows runtime evidence directory: $EvidenceRoot" }
+          $TermsEvidence = @()
+          foreach ($Name in @('TERMS.txt', 'manifest.json')) {
+            $SourcePath = Join-Path $BundleTermsRoot $Name
+            $SourceItem = Get-Item -LiteralPath $SourcePath -ErrorAction Stop
+            if (-not $SourceItem.PSIsContainer -and $SourceItem.Length -gt 0 -and -not ($SourceItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint)) {
+              $SourceHash = (Get-FileHash -LiteralPath $SourcePath -Algorithm SHA256).Hash.ToLowerInvariant()
+            } else {
+              throw "Bundled Windows runtime terms evidence is not a nonempty regular file: $SourcePath"
+            }
+            if ($SourceItem.PSIsContainer) { throw "Bundled Windows runtime terms evidence is a directory: $SourcePath" }
+            $TermsEvidence += @{ filename = $Name; size_bytes = [int64]$SourceItem.Length; sha256 = $SourceHash }
+          }
+          New-Item -ItemType Directory -Path $EvidenceRoot | Out-Null
+          foreach ($Entry in $TermsEvidence) {
+            $SourcePath = Join-Path $BundleTermsRoot $Entry.filename
+            $DestinationPath = Join-Path $EvidenceRoot $Entry.filename
+            Copy-Item -LiteralPath $SourcePath -Destination $DestinationPath
+            $CopiedItem = Get-Item -LiteralPath $DestinationPath -ErrorAction Stop
+            $CopiedHash = (Get-FileHash -LiteralPath $DestinationPath -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($CopiedItem.PSIsContainer -or $CopiedItem.Length -ne $Entry.size_bytes -or $CopiedHash -ne $Entry.sha256) {
+              throw "Copied Windows runtime terms evidence did not match its verified bundle file: $($Entry.filename)"
+            }
+            Write-Output "Verified bundled Windows runtime terms evidence $($Entry.filename): $($Entry.size_bytes) bytes sha256:$($Entry.sha256)"
+          }
+          $Proof = [ordered]@{
+            schema_version = 1
+            outcome = 'silent_installer_refused_without_runtime_terms_acceptance'
+            installer_exit_code = $InstallerExitCode
+            explicit_acceptance_supplied = $false
+            refusal_marker_found = $true
+            installation_directory_created = $false
+            startup_run_value_unchanged = $true
+            runtime_terms_files = $TermsEvidence
+            interactive_acceptance_tested = $false
+            successful_installation_claimed = $false
+            application_or_audio_tested = $false
+            redistribution_grant_claimed = $false
+          }
+          $ProofPath = Join-Path $EvidenceRoot 'installer-refusal.json'
+          if (Test-Path -LiteralPath $ProofPath) { throw "Refusing to overwrite installer refusal proof: $ProofPath" }
+          $ProofJson = ConvertTo-Json -InputObject $Proof -Depth 5
+          [System.IO.File]::WriteAllText($ProofPath, "$ProofJson`n", [System.Text.UTF8Encoding]::new($false))
       - name: Generate Windows native dependency evidence
         run: .\.venv\Scripts\python.exe scripts\native_report.py --bundle dist\windows\NovaMicSwitch --workpath build\windows --output-dir build\native-evidence
       - name: Probe frozen Windows Qt Multimedia backend
@@ -357,6 +458,9 @@ jobs:
             build/native-evidence/report.json
             build/native-evidence/windows/media-probe.json
             build/native-evidence/notices/**/*.txt
+            build/native-evidence/windows-runtime/TERMS.txt
+            build/native-evidence/windows-runtime/manifest.json
+            build/native-evidence/windows-runtime/installer-refusal.json
           if-no-files-found: error
       - name: Smoke-test frozen Windows executable without opening devices
         shell: pwsh

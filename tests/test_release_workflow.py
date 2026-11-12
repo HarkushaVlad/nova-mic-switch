@@ -295,6 +295,54 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("toc_rows=a.binaries + a.datas", spec)
         self.assertIn('"DATA"', spec)
 
+    def test_windows_installer_refusal_is_negative_only_and_safe_metadata_is_uploaded(self):
+        workflow = (ROOT / ".github" / "workflows" / "build-release.yml").read_text(encoding="utf-8")
+        windows_start = workflow.index("  windows-x64:")
+        windows_end = workflow.index("  corresponding-sources:", windows_start)
+        windows_job = workflow[windows_start:windows_end]
+        build_pos = windows_job.index("Build Windows onedir bundle and installer")
+        refusal_pos = windows_job.index("Verify installer refuses silent runtime terms acceptance")
+        report_pos = windows_job.index("Generate Windows native dependency evidence")
+        upload_pos = windows_job.index("Upload Windows native evidence metadata")
+        self.assertLess(build_pos, refusal_pos)
+        self.assertLess(refusal_pos, report_pos)
+        self.assertLess(report_pos, upload_pos)
+        refusal_step = windows_job[refusal_pos:windows_job.index("      - name:", refusal_pos + 1)]
+        for required in (
+            "'/VERYSILENT'", "'/SUPPRESSMSGBOXES'", "'/NORESTART'", "'/SP-'", "'/NOICONS'",
+            "'/TASKS=!startup'", "WaitForExit(30000)", "Stop-Process -Id $Process.Id -Force",
+            "Silent installation requires explicit Microsoft runtime terms acceptance",
+            "Get-ItemPropertyValue -LiteralPath $RunKeyPath -Name 'NovaMicSwitch' -ErrorAction SilentlyContinue",
+            "Get-NovaMicSwitchRunValue", "$InstallDirectoryCreated = Test-Path -LiteralPath $InstallDirectory",
+            "windows-runtime", "TERMS.txt", "manifest.json", "installer-refusal.json",
+            "explicit_acceptance_supplied = $false", "interactive_acceptance_tested = $false",
+            "successful_installation_claimed = $false", "application_or_audio_tested = $false",
+            "redistribution_grant_claimed = $false",
+        ):
+            self.assertIn(required, refusal_step)
+        self.assertNotIn("/ACCEPTMICROSOFTRUNTIMETERMS", refusal_step)
+        self.assertNotIn("$Process.WaitForExit()", refusal_step)
+        self.assertEqual(refusal_step.count("Get-NovaMicSwitchRunValue"), 3)
+        for mutator in ("Set-ItemProperty", "New-ItemProperty", "Remove-ItemProperty", "reg add", "reg delete"):
+            self.assertNotIn(mutator, refusal_step)
+        self.assertGreaterEqual(refusal_step.count("Test-Path -LiteralPath $InstallDirectory"), 2)
+        self.assertIn("if (Test-Path -LiteralPath $RefusalRoot)", refusal_step)
+        self.assertIn("Refusing to overwrite installer test log", refusal_step)
+
+        upload_start = windows_job.index("Upload Windows native evidence metadata")
+        upload_end = windows_job.index("      - name:", upload_start + 1)
+        upload_step = windows_job[upload_start:upload_end]
+        path_block = upload_step.split("          path: |\n", 1)[1].split("          if-no-files-found:", 1)[0]
+        uploaded_paths = [line.strip() for line in path_block.splitlines() if line.strip()]
+        self.assertEqual(uploaded_paths, [
+            "build/native-evidence/report.json",
+            "build/native-evidence/windows/media-probe.json",
+            "build/native-evidence/notices/**/*.txt",
+            "build/native-evidence/windows-runtime/TERMS.txt",
+            "build/native-evidence/windows-runtime/manifest.json",
+            "build/native-evidence/windows-runtime/installer-refusal.json",
+        ])
+
     def test_linux_hidapi_source_build_policy_and_read_only_runtime_proof(self):
         workflow = (ROOT / ".github" / "workflows" / "build-release.yml").read_text(encoding="utf-8")
         linux_job = workflow[workflow.index("  linux-x86_64:"):workflow.index("  windows-x64:")]
