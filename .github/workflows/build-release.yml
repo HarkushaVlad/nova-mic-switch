@@ -76,6 +76,8 @@ jobs:
     name: Build Linux x86_64 AppImage
     runs-on: ubuntu-22.04
     needs: [validate-inputs]
+    env:
+      UV_NO_BINARY_PACKAGE: hidapi
     steps:
       - name: Checkout source
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
@@ -97,12 +99,63 @@ jobs:
           echo "UV_CACHE_DIR=$GITHUB_WORKSPACE/.uv-cache" >> "$GITHUB_ENV"
           echo "PYINSTALLER_CONFIG_DIR=$GITHUB_WORKSPACE/build/pyinstaller-cache" >> "$GITHUB_ENV"
           echo "QT_QPA_PLATFORM=offscreen" >> "$GITHUB_ENV"
-      - name: Sync locked Python 3.13 environment
-        run: uv sync --python 3.13 --locked --group dev
-      - name: Install Qt headless runtime libraries
+      - name: Install Linux build and Qt runtime libraries
         run: |
           sudo apt-get update
-          sudo apt-get install --no-install-recommends -y libegl1 libopengl0 libpulse0
+          sudo apt-get install --no-install-recommends -y build-essential pkg-config libusb-1.0-0-dev libudev-dev libegl1 libopengl0 libpulse0
+      - name: Sync locked Python 3.13 environment
+        run: uv sync --python 3.13 --locked --group dev
+      - name: Verify Linux hidapi source build and host dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          LOG=build/hidapi-workflow-check.log
+          mkdir -p build
+          : > "$LOG"
+          PROOF_JSON="$(uv run --python 3.13 --locked --group dev python - <<'PY'
+          import importlib
+          import json
+          from pathlib import Path
+          import sysconfig
+
+          modules = []
+          for name in ("hidraw", "hid"):
+              module = importlib.import_module(name)
+              if not callable(getattr(module, "enumerate", None)) or not callable(getattr(module, "device", None)):
+                  raise SystemExit(f"{name} lacks callable enumerate/device APIs")
+              path = Path(module.__file__).resolve()
+              modules.append(str(path))
+
+          site_packages = Path(sysconfig.get_paths()["purelib"]).resolve()
+          vendored = [path for path in site_packages.rglob("*") if "hidapi.libs" in path.parts]
+          if vendored:
+              raise SystemExit("Unexpected hidapi.libs package path(s): " + ", ".join(map(str, vendored)))
+          if any("hidapi.libs" in Path(path).parts for path in modules):
+              raise SystemExit("hid extension resolved from hidapi.libs")
+          print(json.dumps(modules))
+          PY
+          )"
+          mapfile -t HID_EXTENSIONS < <(python3 -c 'import json,sys; print("\n".join(json.loads(sys.argv[1])))' "$PROOF_JSON")
+          echo 'hidraw and hid enumerate/device APIs are callable; no devices were enumerated or opened.' | tee -a "$LOG"
+          echo 'hidapi.libs package paths: none' | tee -a "$LOG"
+          for extension in "${HID_EXTENSIONS[@]}"; do
+            echo "HID extension: $extension" | tee -a "$LOG"
+            echo "readelf -d $extension" | tee -a "$LOG"
+            readelf -d "$extension" 2>&1 | tee -a "$LOG"
+            echo "ldd $extension" | tee -a "$LOG"
+            ldd "$extension" 2>&1 | tee -a "$LOG"
+          done
+          if grep -E 'lib(usb-1\.0\.so\.0|udev\.so\.1) => not found' "$LOG"; then
+            echo 'A required host HID library did not resolve.' >&2
+            exit 1
+          fi
+          for dependency in 'libusb-1\.0\.so\.0' 'libudev\.so\.1'; do
+            if ! grep -Eq "$dependency => /" "$LOG"; then
+              echo "Expected host dependency resolution was not shown: $dependency" >&2
+              exit 1
+            fi
+            grep -E "$dependency => /" "$LOG"
+          done
       - name: Run unit tests
         run: uv run --python 3.13 --locked --group dev python -m unittest discover -s tests -v
       - name: Collect bundled third-party license notices
@@ -146,6 +199,17 @@ jobs:
           mkdir -p dist/release/linux-x86_64
           cp "$APPIMAGE" dist/release/linux-x86_64/
           (cd dist/release/linux-x86_64 && sha256sum "NovaMicSwitch-$VERSION-x86_64.AppImage" > SHA256SUMS && cp SHA256SUMS "NovaMicSwitch-$VERSION-x86_64.AppImage.sha256")
+      - name: Generate Linux native dependency evidence
+        run: uv run --python 3.13 --locked --group dev python scripts/native_report.py --bundle dist/linux/NovaMicSwitch --workpath build/linux --output-dir build/native-evidence
+      - name: Upload Linux native evidence metadata
+        if: ${{ !cancelled() && success() && hashFiles('build/native-evidence/report.json') != '' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: native-evidence-linux
+          path: |
+            build/native-evidence/report.json
+            build/native-evidence/notices/**/*.txt
+          if-no-files-found: error
       - name: Upload Linux release artifact
         if: ${{ inputs.license_reviewed }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -202,6 +266,17 @@ jobs:
       - name: Build Windows onedir bundle and installer
         shell: pwsh
         run: .\scripts\build_windows.ps1 -InnoSetupCompiler $env:INNO_SETUP_COMPILER
+      - name: Generate Windows native dependency evidence
+        run: .\.venv\Scripts\python.exe scripts\native_report.py --bundle dist\windows\NovaMicSwitch --workpath build\windows --output-dir build\native-evidence
+      - name: Upload Windows native evidence metadata
+        if: ${{ !cancelled() && success() && hashFiles('build/native-evidence/report.json') != '' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: native-evidence-windows
+          path: |
+            build/native-evidence/report.json
+            build/native-evidence/notices/**/*.txt
+          if-no-files-found: error
       - name: Smoke-test frozen Windows executable without opening devices
         shell: pwsh
         run: |

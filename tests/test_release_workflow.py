@@ -226,15 +226,76 @@ class ReleaseWorkflowTests(unittest.TestCase):
             self.assertLess(upload_step.index("if: ${{ inputs.license_reviewed }}"), upload_step.index("uses:"))
         self.assertEqual(workflow.count("if: ${{ inputs.license_reviewed }}"), 2)
         linux_job = workflow[workflow.index("  linux-x86_64:"):workflow.index("  windows-x64:")]
-        install_step = linux_job.index("Install Qt headless runtime libraries")
+        install_step = linux_job.index("Install Linux build and Qt runtime libraries")
         unit_step = linux_job.index("Run unit tests")
         self.assertLess(install_step, unit_step)
-        self.assertIn("sudo apt-get install --no-install-recommends -y libegl1 libopengl0 libpulse0", linux_job)
+        sync_step = linux_job.index("Sync locked Python 3.13 environment")
+        self.assertLess(install_step, sync_step)
+        self.assertIn(
+            "sudo apt-get install --no-install-recommends -y build-essential pkg-config "
+            "libusb-1.0-0-dev libudev-dev libegl1 libopengl0 libpulse0",
+            linux_job,
+        )
         self.assertIn("Frozen Linux license manifest SHA-256", linux_job)
         self.assertIn("Frozen Linux native library inventory", linux_job)
         windows_job = workflow[workflow.index("  windows-x64:"):workflow.index("  publish-draft:")]
         self.assertIn("Frozen Windows license manifest SHA-256", windows_job)
         self.assertIn("Frozen Windows native payload inventory", windows_job)
+
+    def test_linux_hidapi_source_build_policy_and_read_only_runtime_proof(self):
+        workflow = (ROOT / ".github" / "workflows" / "build-release.yml").read_text(encoding="utf-8")
+        linux_job = workflow[workflow.index("  linux-x86_64:"):workflow.index("  windows-x64:")]
+        windows_job = workflow[workflow.index("  windows-x64:"):workflow.index("  publish-draft:")]
+        self.assertIn("    env:\n      UV_NO_BINARY_PACKAGE: hidapi", linux_job)
+        self.assertEqual(linux_job.count("UV_NO_BINARY_PACKAGE: hidapi"), 1)
+        self.assertNotIn("UV_NO_BINARY_PACKAGE", windows_job)
+        self.assertNotIn("HIDAPI_WITH_HIDRAW", workflow)
+        self.assertNotIn("HIDAPI_WITH_LIBUSB", workflow)
+
+        apt_index = linux_job.index("Install Linux build and Qt runtime libraries")
+        sync_index = linux_job.index("Sync locked Python 3.13 environment")
+        proof_index = linux_job.index("Verify Linux hidapi source build and host dependencies")
+        self.assertLess(apt_index, sync_index)
+        self.assertLess(sync_index, proof_index)
+        proof_step = linux_job[proof_index:linux_job.index("      - name:", proof_index + 1)]
+        self.assertIn('for name in ("hidraw", "hid")', proof_step)
+        self.assertIn('getattr(module, "enumerate", None)', proof_step)
+        self.assertIn('getattr(module, "device", None)', proof_step)
+        self.assertIn('site_packages.rglob("*")', proof_step)
+        self.assertIn('"hidapi.libs"', proof_step)
+        self.assertIn('readelf -d "$extension"', proof_step)
+        self.assertIn('ldd "$extension"', proof_step)
+        self.assertIn("'libusb-1\\.0\\.so\\.0' 'libudev\\.so\\.1'", proof_step)
+        self.assertIn('grep -Eq "$dependency => /"', proof_step)
+        self.assertIn("build/hidapi-workflow-check.log", proof_step)
+        self.assertNotIn(".enumerate(", proof_step)
+        self.assertNotIn(".device(", proof_step)
+
+    def test_native_evidence_is_generated_and_uploaded_as_metadata_only(self):
+        workflow = (ROOT / ".github" / "workflows" / "build-release.yml").read_text(encoding="utf-8")
+        for platform, bundle, workpath in (
+            ("Linux", "dist/linux/NovaMicSwitch", "build/linux"),
+            ("Windows", "dist\\windows\\NovaMicSwitch", "build\\windows"),
+        ):
+            report_name = f"Generate {platform} native dependency evidence"
+            report_start = workflow.index(f"      - name: {report_name}")
+            report_end = workflow.index("      - name:", report_start + 1)
+            report_step = workflow[report_start:report_end]
+            self.assertIn(f"--bundle {bundle}", report_step)
+            self.assertIn(f"--workpath {workpath}", report_step)
+            self.assertIn("--output-dir build", report_step)
+
+            upload_name = f"Upload {platform} native evidence metadata"
+            upload_start = workflow.index(f"      - name: {upload_name}")
+            upload_end = workflow.index("      - name:", upload_start + 1)
+            upload_step = workflow[upload_start:upload_end]
+            self.assertIn("!cancelled() && success() && hashFiles('build/native-evidence/report.json') != ''", upload_step)
+            self.assertNotIn("inputs.license_reviewed", upload_step)
+            self.assertIn(f"name: native-evidence-{platform.lower()}", upload_step)
+            self.assertIn("build/native-evidence/report.json", upload_step)
+            self.assertIn("build/native-evidence/notices/**/*.txt", upload_step)
+            self.assertNotIn("dist/", upload_step)
+            self.assertNotIn("dist\\", upload_step)
 
         attributes = (ROOT / ".gitattributes").read_text(encoding="utf-8")
         self.assertIn("packaging/licenses/** -text", attributes)
