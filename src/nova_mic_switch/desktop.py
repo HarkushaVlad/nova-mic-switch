@@ -31,6 +31,7 @@ class _Signals(QObject):
     event = Signal(object)
     source_done = Signal(int, object, object)
     startup_done = Signal(object, object)
+    tray_source_done = Signal(int, object, object)
 
 
 class _Task(QRunnable):
@@ -192,6 +193,10 @@ class DesktopWindow(QMainWindow):
         self.service = None
         self.sources = []
         self._source_generation = 0
+        self._tray_generation = 0
+        self._tray_query_pending = False
+        self._tray_request_id = 0
+        self._tray_refresh_needed = False
         self._config_locked = False
         self._closing = False
         self._feedback_warning_text = ""
@@ -223,6 +228,13 @@ class DesktopWindow(QMainWindow):
         self.setStyleSheet(STYLE)
         self._build_ui()
         self._setup_tray()
+        self.signals.tray_source_done.connect(self._tray_source_loaded)
+        self._tray_timer = QTimer(self)
+        self._tray_timer.setInterval(4000)
+        self._tray_timer.timeout.connect(self._refresh_tray_source)
+        if self.tray and not self.safe_mode and not self.load_error:
+            self._tray_timer.start()
+            self._refresh_tray_source()
         if self.load_error:
             self.status.setText("Settings need attention")
             self.detail.setText(self.load_error)
@@ -296,6 +308,7 @@ class DesktopWindow(QMainWindow):
         self.scope_combo.setCurrentIndex(max(0, self.scope_combo.findData(self.settings.scope)))
         self.scope_combo.currentIndexChanged.connect(self._save_settings)
         self.scope_combo.currentIndexChanged.connect(self.refresh_sources)
+        self.scope_combo.currentIndexChanged.connect(self._tray_scope_changed)
         scope_card = QFrame(objectName="card")
         scope_form = QFormLayout(scope_card)
         scope_form.setContentsMargins(18, 14, 18, 14)
@@ -391,6 +404,86 @@ class DesktopWindow(QMainWindow):
         self.tray.setContextMenu(menu)
         self.tray.activated.connect(lambda reason: self.showNormal() if reason == QSystemTrayIcon.ActivationReason.Trigger else None)
         self.tray.show()
+
+    def _refresh_tray_source(self):
+        if self._closing or self.safe_mode or not self.tray:
+            return
+        if self._tray_query_pending:
+            return
+        self._tray_generation += 1
+        revision = self._tray_generation
+        self._tray_request_id += 1
+        request_id = self._tray_request_id
+        scope = self.scope_combo.currentData()
+        self._tray_query_pending = True
+        self._tray_refresh_needed = False
+
+        def inspect_current():
+            router = self.router_factory(scope)
+            sources = router.list_sources()
+            current = router.current_source()
+            return (scope, sources, current)
+
+        class TrayTask(QRunnable):
+            def run(task_self):
+                try:
+                    result = inspect_current()
+                    if self._closing:
+                        return
+                    try:
+                        self.signals.tray_source_done.emit(request_id, (revision, result), None)
+                    except RuntimeError:
+                        pass
+                except Exception as exc:
+                    if self._closing:
+                        return
+                    try:
+                        self.signals.tray_source_done.emit(request_id, (revision, None), str(exc))
+                    except RuntimeError:
+                        pass
+
+        self.pool.start(TrayTask())
+
+    def _tray_scope_changed(self, *_):
+        self._tray_generation += 1
+        self._tray_refresh_needed = True
+        if self.tray:
+            self.tray.setToolTip(self._tray_tooltip(self.scope_combo.currentData(), None, unavailable=True))
+            self._refresh_tray_source()
+
+    def _invalidate_tray_source(self):
+        self._tray_generation += 1
+        self._tray_refresh_needed = True
+        if self.tray:
+            self.tray.setToolTip(self._tray_tooltip(self.scope_combo.currentData(), None, unavailable=True))
+        self._refresh_tray_source()
+
+    def _tray_source_loaded(self, request_id, result, error):
+        if request_id != self._tray_request_id:
+            return
+        self._tray_query_pending = False
+        if self._closing or not self.tray:
+            return
+        scope = self.scope_combo.currentData()
+        revision, payload = result if result is not None else (None, None)
+        if revision != self._tray_generation or self._tray_refresh_needed:
+            self._refresh_tray_source()
+            return
+        if error:
+            self.tray.setToolTip(self._tray_tooltip(scope, None, unavailable=True))
+            return
+        result_scope, sources, current = payload
+        if result_scope != scope:
+            self._refresh_tray_source()
+            return
+        name = next((source.name for source in sources if source.id == current), None) if current else None
+        self.tray.setToolTip(self._tray_tooltip(scope, name, unavailable=not name))
+
+    @staticmethod
+    def _tray_tooltip(scope, name, unavailable=False):
+        label = "Discord microphone" if scope == "discord" else "System microphone"
+        value = "unavailable" if unavailable else name
+        return f"Nova Mic Switch · {label}: {value}"[:127]
 
     def refresh_sources(self):
         if self.safe_mode or self._config_locked:
@@ -835,8 +928,8 @@ class DesktopWindow(QMainWindow):
         if self._tray_action:
             running = self.service is not None
             self._tray_action.setText("Stop listening" if running else "Start listening")
-            if self.tray:
-                self.tray.setToolTip("Nova Mic Switch · listening for headset POWER" if running else "Nova Mic Switch · stopped")
+            if self.tray and not running:
+                self._refresh_tray_source()
         self.start_button.setToolTip("Stop microphone button listening" if self.service is not None else "Start listening for the headset POWER button")
 
     def _service_event(self, event):
@@ -844,8 +937,8 @@ class DesktopWindow(QMainWindow):
         if kind == "state":
             state = event.get("state")
             self.status.setText({"connecting": "Connecting to headset button…", "listening": "Listening for the headset button", "stopped": "Stopped"}.get(state, str(state)))
-            if self.tray:
-                self.tray.setToolTip({"connecting": "Nova Mic Switch · connecting", "listening": "Nova Mic Switch · listening for headset POWER", "stopped": "Nova Mic Switch · stopped"}.get(state, "Nova Mic Switch"))
+            if self.tray and state == "stopped":
+                self._refresh_tray_source()
             if state == "stopped" and self.service is not None:
                 QTimer.singleShot(0, self._poll_service_stop)
         elif kind == "switch":
@@ -861,7 +954,10 @@ class DesktopWindow(QMainWindow):
                 self.status.setText("Headset microphone active")
             else:
                 self.status.setText("Button detected · no configured target")
+            if event.get("applied") is True and event.get("dry_run") is False:
+                self._invalidate_tray_source()
         elif kind == "error":
+            self._invalidate_tray_source()
             message = event.get("message", "A device or audio error occurred.")
             if self.settings.scope == "discord" and "no Discord recording stream" in message:
                 message = "No active Discord voice capture was found. Join or start a voice call, then try the headset button again."
@@ -890,6 +986,10 @@ class DesktopWindow(QMainWindow):
         event.accept()
 
     def _finish_close(self):
+        self._closing = True
+        self._tray_generation += 1
+        self._tray_query_pending = False
+        self._tray_timer.stop()
         if self.feedback:
             self.feedback.close()
         if self.tray:

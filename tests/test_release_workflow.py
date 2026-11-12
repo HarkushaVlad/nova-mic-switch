@@ -212,6 +212,32 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertEqual(basenames.count("SHA256SUMS"), 1)
         self.assertIn("cat release-assets/linux-x86_64/SHA256SUMS release-assets/windows-x64/SHA256SUMS > release-assets/SHA256SUMS", workflow)
 
+    def test_binary_uploads_require_review_and_linux_installs_only_runner_qt_libraries(self):
+        workflow = (ROOT / ".github" / "workflows" / "build-release.yml").read_text(encoding="utf-8")
+        for platform, next_job in (("Linux", "  windows-x64:"), ("Windows", "  publish-draft:")):
+            start = workflow.index(f"      - name: Upload {platform} release artifact")
+            end = workflow.index(next_job, start)
+            upload_step = workflow[start:end]
+            self.assertIn("if: ${{ inputs.license_reviewed }}", upload_step)
+            self.assertLess(upload_step.index("if: ${{ inputs.license_reviewed }}"), upload_step.index("uses:"))
+        self.assertEqual(workflow.count("if: ${{ inputs.license_reviewed }}"), 2)
+        linux_job = workflow[workflow.index("  linux-x86_64:"):workflow.index("  windows-x64:")]
+        install_step = linux_job.index("Install Qt headless runtime libraries")
+        unit_step = linux_job.index("Run unit tests")
+        self.assertLess(install_step, unit_step)
+        self.assertIn("sudo apt-get install --no-install-recommends -y libegl1 libopengl0", linux_job)
+        self.assertIn("Frozen Linux license manifest SHA-256", linux_job)
+        self.assertIn("Frozen Linux native library inventory", linux_job)
+        windows_job = workflow[workflow.index("  windows-x64:"):workflow.index("  publish-draft:")]
+        self.assertIn("Frozen Windows license manifest SHA-256", windows_job)
+        self.assertIn("Frozen Windows native payload inventory", windows_job)
+
+        attributes = (ROOT / ".gitattributes").read_text(encoding="utf-8")
+        self.assertIn("packaging/licenses/** -text", attributes)
+        docs = (ROOT / "docs" / "releasing.md").read_text(encoding="utf-8")
+        self.assertIn("With `license_reviewed` false", docs)
+        self.assertIn("no downloadable binaries", docs)
+
 
 if __name__ == "__main__":
     unittest.main()

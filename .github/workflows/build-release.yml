@@ -14,7 +14,7 @@ on:
         required: false
         default: ''
       license_reviewed:
-        description: Confirm third-party notices and real-platform test review is complete
+        description: Confirm legal/notice and real-platform review; required to upload public binary artifacts or publish a draft
         type: boolean
         required: true
         default: false
@@ -99,6 +99,10 @@ jobs:
           echo "QT_QPA_PLATFORM=offscreen" >> "$GITHUB_ENV"
       - name: Sync locked Python 3.13 environment
         run: uv sync --python 3.13 --locked --group dev
+      - name: Install Qt headless runtime libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y libegl1 libopengl0
       - name: Run unit tests
         run: uv run --python 3.13 --locked --group dev python -m unittest discover -s tests -v
       - name: Collect bundled third-party license notices
@@ -123,6 +127,12 @@ jobs:
           for path in manifest.json THIRD-PARTY-NOTICES.md Python-LICENSE.txt qt-6.12.0/LGPL-3.0-only.txt ffmpeg-9.0.1/qt_attribution.json ffmpeg-9.0.1/LICENSE.LGPL-2.1-or-later.txt; do
             test -s "$LICENSES/$path" || { echo "Frozen Linux license payload missing: $LICENSES/$path" >&2; exit 1; }
           done
+          echo 'Frozen Linux license manifest SHA-256:'
+          sha256sum "$LICENSES/manifest.json"
+          echo 'Frozen Linux bundle file count:'
+          find dist/linux/NovaMicSwitch -type f | wc -l
+          echo 'Frozen Linux native library inventory:'
+          find dist/linux/NovaMicSwitch -type f \( -name '*.so' -o -name '*.so.*' \) -printf '%P\n' | sort
           FORBIDDEN="$(find dist/linux/NovaMicSwitch \( -iname '*virtualkeyboard*' -o -iname '*libqt6pdf*' -o -iname 'qpdf.dll' -o -iname 'libqpdf.so' \) -print -quit)"
           if [[ -n "$FORBIDDEN" ]]; then
             echo 'Frozen Linux bundle unexpectedly contains an excluded Qt Virtual Keyboard/PDF component.' >&2
@@ -137,6 +147,7 @@ jobs:
           cp "$APPIMAGE" dist/release/linux-x86_64/
           (cd dist/release/linux-x86_64 && sha256sum "NovaMicSwitch-$VERSION-x86_64.AppImage" > SHA256SUMS && cp SHA256SUMS "NovaMicSwitch-$VERSION-x86_64.AppImage.sha256")
       - name: Upload Linux release artifact
+        if: ${{ inputs.license_reviewed }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: linux-x86_64
@@ -216,9 +227,17 @@ jobs:
             if (-not (Test-Path -LiteralPath $LicensePath -PathType Leaf)) { throw "Frozen Windows license payload missing: $LicensePath" }
             if ((Get-Item -LiteralPath $LicensePath).Length -le 0) { throw "Frozen Windows license payload is empty: $LicensePath" }
           }
+          Write-Output 'Frozen Windows license manifest SHA-256:'
+          Get-FileHash -LiteralPath (Join-Path $LicenseRoot 'manifest.json') -Algorithm SHA256 | ForEach-Object { '{0}  {1}' -f $_.Hash.ToLowerInvariant(), 'manifest.json' }
+          $BundleRoot = Join-Path $env:GITHUB_WORKSPACE 'dist\windows\NovaMicSwitch'
+          $BundleFiles = Get-ChildItem -LiteralPath $BundleRoot -File -Recurse
+          Write-Output "Frozen Windows bundle file count: $($BundleFiles.Count)"
+          Write-Output 'Frozen Windows native payload inventory:'
+          $BundleFiles | Where-Object { $_.Extension -in @('.dll', '.pyd', '.exe') } | ForEach-Object { $_.FullName.Substring($BundleRoot.Length + 1) } | Sort-Object
           $Forbidden = Get-ChildItem -LiteralPath (Join-Path $env:GITHUB_WORKSPACE 'dist\windows\NovaMicSwitch') -File -Recurse | Where-Object { $_.FullName -match '(?i)virtualkeyboard|libqt6pdf|qpdf\.dll|libqpdf\.so' }
           if ($Forbidden) { throw "Frozen Windows bundle unexpectedly contains excluded Qt Virtual Keyboard/PDF files: $($Forbidden.FullName -join ', ')" }
       - name: Upload Windows release artifact
+        if: ${{ inputs.license_reviewed }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: windows-x64

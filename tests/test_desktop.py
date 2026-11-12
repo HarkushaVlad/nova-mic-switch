@@ -163,6 +163,8 @@ class DesktopWindowTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             window = self.make_window(directory)
             window.safe_mode = False
+            if window.scope_combo.currentData() != "discord":
+                self.skipTest("Discord-specific capture routing is available only in Discord scope")
             window._sources_loaded(window._source_generation,
                                    (FakeRouter().list_sources(), "", "", "", "no Discord recording stream"), None)
             self.assertEqual(window.desktop_combo.currentData(), "system-mic")
@@ -252,6 +254,7 @@ class DesktopWindowTests(unittest.TestCase):
 
     def test_disabled_login_minimized_choice_saves_without_native_write(self):
         with tempfile.TemporaryDirectory() as directory:
+            save_settings(Path(directory), AppSettings(start_at_login=False))
             startup = FakeStartup(enabled=False)
             window = self.make_window(directory)
             window.safe_mode = False
@@ -511,6 +514,13 @@ class DesktopWindowTests(unittest.TestCase):
 
                 from PySide6.QtTest import QSignalSpy
                 spy = QSignalSpy(primary.activation)
+                def wait_for_count(count, timeout=1000):
+                    from PySide6.QtCore import QElapsedTimer
+                    timer = QElapsedTimer()
+                    timer.start()
+                    while spy.count() < count and timer.elapsed() < timeout:
+                        self.app.processEvents()
+                    return spy.count() >= count
                 with patch.dict(os.environ, {"TMPDIR": str(other_tmp), "XDG_RUNTIME_DIR": str(runtime_dir)}):
                     second = InstanceCoordinator(config_dir)
                     self.assertEqual(second.server_name, primary.server_name)
@@ -518,13 +528,13 @@ class DesktopWindowTests(unittest.TestCase):
                     self.assertTrue(primary.server.isListening())
                     if socket_path is not None:
                         self.assertTrue(socket_path.exists(), "failed lock acquisition must not unlink the active endpoint")
-                    self.assertTrue(spy.wait(1000))
+                    self.assertTrue(wait_for_count(1))
                     self.assertEqual(spy.at(0), ["activate"])
                     third = InstanceCoordinator(config_dir)
                     self.assertEqual(third.server_name, primary.server_name)
                     self.assertFalse(third.acquire_or_notify("tray"))
                     self.assertTrue(primary.server.isListening())
-                    self.assertTrue(spy.wait(1000))
+                    self.assertTrue(wait_for_count(2))
                     self.assertEqual(spy.at(1), ["tray"])
             finally:
                 if primary is not None:

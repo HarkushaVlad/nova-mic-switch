@@ -71,14 +71,15 @@ class StartupTests(unittest.TestCase):
         self.root = Path(self.temp.name)
 
     def test_default_command_source_and_frozen(self):
-        with patch.dict(os.environ, {}, clear=True), patch.object(sys, "platform", "linux"), patch.object(sys, "executable", "/usr/bin/python3"):
+        executable = str(Path(sys.executable).absolute())
+        with patch.dict(os.environ, {}, clear=True), patch.object(sys, "platform", "linux"):
             with patch.object(sys, "frozen", False, create=True):
                 config = self.root / "config"
                 self.assertEqual(default_startup_command(config), (
-                    "/usr/bin/python3", "-m", "nova_mic_switch.desktop", "--config-dir", str(config.absolute())
+                    executable, "-m", "nova_mic_switch.desktop", "--config-dir", str(config.absolute())
                 ))
             with patch.object(sys, "frozen", True, create=True):
-                self.assertEqual(default_startup_command(), ("/usr/bin/python3",))
+                self.assertEqual(default_startup_command(), (executable,))
 
     def test_frozen_linux_appimage_uses_original_file_and_extract_run(self):
         appimage = self.root / "Nova Mic Switch % release.AppImage"
@@ -95,7 +96,7 @@ class StartupTests(unittest.TestCase):
         manager = StartupManager(command, platform="linux", config_home=self.root / "xdg profile")
         manager.set_enabled(True, start_minimized=True)
         entry = (self.root / "xdg profile/autostart" / LINUX_FILENAME).read_text(encoding="utf-8")
-        escaped_appimage = str(appimage).replace("%", "%%")
+        escaped_appimage = str(appimage).replace("\\", "\\\\\\\\").replace("%", "%%")
         self.assertIn(f'Exec="{escaped_appimage}" "--appimage-extract-and-run"', entry)
         self.assertEqual(entry.count("--tray"), 1)
 
@@ -115,11 +116,12 @@ class StartupTests(unittest.TestCase):
                             default_startup_command(self.root / "profile")
 
     def test_source_and_windows_frozen_launch_ignore_appimage_environment(self):
+        executable = str(Path(sys.executable).absolute())
         with patch.dict(os.environ, {"APPIMAGE": "invalid relative value\n"}, clear=False):
-            with patch.object(sys, "platform", "linux"), patch.object(sys, "executable", "/usr/bin/python3"):
+            with patch.object(sys, "platform", "linux"):
                 with patch.object(sys, "frozen", False, create=True):
                     self.assertEqual(default_startup_command(), (
-                        "/usr/bin/python3", "-m", "nova_mic_switch.desktop"
+                        executable, "-m", "nova_mic_switch.desktop"
                     ))
             with patch.object(sys, "platform", "win32"), patch.object(sys, "executable", r"C:\Program Files\Nova\app.exe"):
                 with patch.object(sys, "frozen", True, create=True):
@@ -205,7 +207,8 @@ class StartupTests(unittest.TestCase):
     def test_linux_registration_content_update_and_escaping(self):
         config = self.root / "cfg space" / 'quote"' / "back\\slash%$`"
         four_backslashes = "four" + "\\" * 4 + "slashes"
-        command = ("/opt/nova app%/bin", "arg with space", 'q"uote', "back\\slash",
+        executable = str(self.root / "opt nova app%" / "bin")
+        command = (executable, "arg with space", 'q"uote', "back\\slash",
                    four_backslashes, "$HOME", "`touch`", "%f")
         manager = StartupManager(command, platform="linux", config_home=config)
         path = config / "autostart" / LINUX_FILENAME
@@ -213,7 +216,8 @@ class StartupTests(unittest.TestCase):
         self.assertFalse(path.parent.exists())
         manager.set_enabled(True)
         content = path.read_text(encoding="utf-8")
-        self.assertIn('Exec="/opt/nova app%%/bin"', content)
+        escaped_executable = executable.replace("\\", "\\\\\\\\").replace("%", "%%")
+        self.assertIn(f'Exec="{escaped_executable}"', content)
         self.assertIn("%%f", content)
         self.assertIn('q\\\\"uote', content)
         self.assertIn('"back\\\\\\\\slash"', content)
@@ -221,7 +225,7 @@ class StartupTests(unittest.TestCase):
         self.assertIn('"\\\\$HOME"', content)
         self.assertIn('"\\\\`touch\\\\`"', content)
         self.assertTrue(manager.is_enabled())
-        stale = StartupManager(("/opt/another-version",), platform="linux", config_home=config)
+        stale = StartupManager((str(self.root / "opt" / "another-version"),), platform="linux", config_home=config)
         self.assertTrue(stale.is_enabled())
         manager.set_enabled(True, start_minimized=False)
         self.assertNotIn("--tray", path.read_text(encoding="utf-8"))
@@ -233,7 +237,8 @@ class StartupTests(unittest.TestCase):
 
     def test_linux_rejects_collision_symlink_and_invalid_utf8(self):
         config = self.root / "config"
-        manager = StartupManager(("/bin/app",), platform="linux", config_home=config)
+        app = str(self.root / "bin" / "app")
+        manager = StartupManager((app,), platform="linux", config_home=config)
         path = config / "autostart" / LINUX_FILENAME
         path.parent.mkdir(parents=True)
         path.write_text("foreign data")
@@ -273,7 +278,7 @@ class StartupTests(unittest.TestCase):
 
     def test_linux_atomic_failure_preserves_existing_owned_entry(self):
         config = self.root / "config"
-        manager = StartupManager(("/bin/app",), platform="linux", config_home=config)
+        manager = StartupManager((str(self.root / "bin" / "app"),), platform="linux", config_home=config)
         path = config / "autostart" / LINUX_FILENAME
         manager.set_enabled(True)
         original = path.read_bytes()
@@ -285,11 +290,11 @@ class StartupTests(unittest.TestCase):
 
     def test_linux_rejects_equals_before_filesystem_changes_and_validates_removal(self):
         config = self.root / "config"
-        manager = StartupManager(("/bin/app=name",), platform="linux", config_home=config)
+        manager = StartupManager((str(self.root / "bin" / "app=name"),), platform="linux", config_home=config)
         with self.assertRaisesRegex(StartupError, "cannot contain '='"):
             manager.set_enabled(True)
         self.assertFalse(config.exists())
-        manager = StartupManager(("/bin/app",), platform="linux", config_home=config)
+        manager = StartupManager((str(self.root / "bin" / "app"),), platform="linux", config_home=config)
         path = config / "autostart" / LINUX_FILENAME
         manager.set_enabled(True)
         with patch.object(Path, "unlink", autospec=True, side_effect=lambda self: None):
@@ -298,7 +303,7 @@ class StartupTests(unittest.TestCase):
         self.assertTrue(path.exists())
 
     def test_linux_xdg_home_and_unsupported_platform(self):
-        manager = StartupManager(("/bin/app",), platform="linux",
+        manager = StartupManager((str(self.root / "bin" / "app"),), platform="linux",
                                  environ={"XDG_CONFIG_HOME": str(self.root / "xdg")})
         self.assertEqual(manager._linux_path, self.root / "xdg" / "autostart" / LINUX_FILENAME)
         unsupported = StartupManager(("app",), platform="darwin", config_home=self.root)

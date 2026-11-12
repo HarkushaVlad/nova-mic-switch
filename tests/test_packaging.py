@@ -126,10 +126,15 @@ class PackagingDefinitionTests(unittest.TestCase):
             self.assertTrue(any("qt6quick" in name for name in binary_names))
             self.assertTrue(any("platforms/libqxcb" in name for name in binary_names))
             license_datas = [item for item in datas if isinstance(item, tuple) and len(item) == 2 and str(item[1]).startswith("licenses")]
-            self.assertTrue(any(Path(item[0]).name == "THIRD-PARTY-NOTICES.md" and item[1] == "licenses" for item in license_datas))
-            self.assertTrue(any(Path(item[0]).name == "manifest.json" and item[1] == "licenses" for item in license_datas))
-            self.assertTrue(any(item[1] == "licenses/qt-6.12.0" for item in license_datas))
-            self.assertTrue(any(item[1] == "licenses/ffmpeg-9.0.1" for item in license_datas))
+            normalized_license_datas = [(item[0], str(item[1]).replace("\\", "/")) for item in license_datas]
+            self.assertTrue(any(Path(source).name == "THIRD-PARTY-NOTICES.md" and destination == "licenses"
+                                for source, destination in normalized_license_datas))
+            self.assertTrue(any(Path(source).name == "manifest.json" and destination == "licenses"
+                                for source, destination in normalized_license_datas))
+            self.assertTrue(any(destination == "licenses/qt-6.12.0"
+                                for _, destination in normalized_license_datas))
+            self.assertTrue(any(destination == "licenses/ffmpeg-9.0.1"
+                                for _, destination in normalized_license_datas))
             self.assertEqual(
                 metadata_calls,
                 ["PySide6", "PySide6_Essentials", "PySide6_Addons", "shiboken6", "hidapi", "pyinstaller"],

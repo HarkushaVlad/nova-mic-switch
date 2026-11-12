@@ -28,16 +28,23 @@ Build artifacts include:
 
 - `NovaMicSwitch-VERSION-x86_64.AppImage`
 - `NovaMicSwitch-Setup-VERSION.exe`
-- Per-platform `SHA256SUMS` and a checksum file alongside each binary; a
-  combined `SHA256SUMS` is attached to a draft release
+- When distribution is approved: per-platform `SHA256SUMS` and a checksum file
+  alongside each binary; a combined `SHA256SUMS` is attached to a draft release
 
-The workflow uploads artifacts and does not publish automatically. The
-AppImage tool and Inno Setup installer are downloaded only from exact approved
+The workflow does not publish automatically. The AppImage tool and Inno Setup
+installer are downloaded only from exact approved
 HTTPS GitHub release URLs and checked against `packaging/release-tools.json`.
 Cached tools are hashed again before every use. The appimagetool URL is a
 mutable `continuous` release, so its pinned digest must be deliberately
 reviewed and updated when upstream changes the asset. Do not have automation
 refresh that digest.
+
+Both platform jobs build, test, smoke-test, and emit bundle/license inventory
+and license-manifest SHA-256 details in their logs even when distribution is
+not approved. Binary artifact uploads are gated separately by the explicit
+`license_reviewed` input. Do not set it until third-party notices and real
+platform testing have been reviewed. With `license_reviewed` false, the run is
+build-only: it uploads no downloadable binaries and cannot publish a draft.
 
 The AppImage runtime is pinned to the official `20251108` x86_64 asset with its
 reviewed SHA-256, 944632-byte size, and source commit recorded in the strict
