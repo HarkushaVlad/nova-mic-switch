@@ -3,6 +3,24 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+
+function Get-InnoEngineVersion([string[]]$Output) {
+    $pattern = '^Compiler engine version:\s+Inno Setup\s+([0-9]+\.[0-9]+\.[0-9]+)\s*$'
+    $banners = @()
+    foreach ($line in $Output) {
+        $match = [regex]::Match([string]$line, $pattern, [System.Text.RegularExpressions.RegexOptions]::CultureInvariant)
+        if ($match.Success) { $banners += $match }
+    }
+    if ($banners.Count -ne 1) {
+        throw "Expected exactly one Inno Setup compiler engine version banner, found $($banners.Count)."
+    }
+    $version = $banners[0].Groups[1].Value
+    if ($version -cne '6.7.4') {
+        throw "Expected Inno Setup compiler engine 6.7.4, got $version"
+    }
+    return $version
+}
+
 $Root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 if ($env:OS -ne 'Windows_NT') {
     throw 'This script must run on native Windows; cross-compilation is not supported.'
@@ -36,18 +54,17 @@ try {
         if (-not (Test-Path -LiteralPath $Compiler -PathType Leaf)) {
             throw "Inno Setup compiler not found: $Compiler"
         }
-        $CompilerVersion = (Get-Item -LiteralPath $Compiler).VersionInfo.ProductVersion
-        if (-not $CompilerVersion) { $CompilerVersion = (Get-Item -LiteralPath $Compiler).VersionInfo.FileVersion }
-        if ($CompilerVersion -and $CompilerVersion -notmatch '^6\.7\.4(?:\.|$)') {
-            throw "Expected Inno Setup compiler 6.7.4, got $CompilerVersion"
-        }
         $Version = & $Python -c 'import tomllib; print(tomllib.loads(open("pyproject.toml", "rb").read().decode())["project"]["version"])'
         if ($LASTEXITCODE -ne 0 -or $Version -notmatch '^\d+\.\d+\.\d+(?:[-+][A-Za-z0-9.-]+)?$') {
             throw "Could not read a safe release version from pyproject.toml: $Version"
         }
         New-Item -ItemType Directory -Force -Path (Join-Path $Root 'dist\installers') | Out-Null
-        & $Compiler "/DAppVersion=$Version" (Join-Path $Root 'packaging\windows\installer.iss')
-        if ($LASTEXITCODE -ne 0) { throw "Inno Setup failed with exit code $LASTEXITCODE" }
+        $CompilerOutput = @(& $Compiler "/DAppVersion=$Version" (Join-Path $Root 'packaging\windows\installer.iss') 2>&1)
+        $CompilerExitCode = $LASTEXITCODE
+        $CompilerOutput | ForEach-Object { Write-Output "$_" }
+        if ($CompilerExitCode -ne 0) { throw "Inno Setup failed with exit code $CompilerExitCode" }
+        $CompilerVersion = Get-InnoEngineVersion -Output @($CompilerOutput | ForEach-Object { "$_" })
+        Write-Output "Verified Inno Setup compiler engine version: $CompilerVersion"
         $Installer = Join-Path $Root "dist\installers\NovaMicSwitch-Setup-$Version.exe"
         if (-not (Test-Path -LiteralPath $Installer -PathType Leaf)) { throw "Expected installer was not created: $Installer" }
         $Hash = (Get-FileHash -LiteralPath $Installer -Algorithm SHA256).Hash.ToLowerInvariant()

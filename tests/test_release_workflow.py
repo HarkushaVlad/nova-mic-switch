@@ -205,6 +205,10 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("_internal\\licenses", workflow)
         windows_script = (ROOT / "scripts" / "build_windows.ps1").read_text(encoding="utf-8")
         self.assertIn("WriteAllText", windows_script)
+        self.assertIn("function Get-InnoEngineVersion", windows_script)
+        self.assertIn("$CompilerExitCode = $LASTEXITCODE", windows_script)
+        self.assertNotIn("VersionInfo.ProductVersion", windows_script)
+        self.assertNotIn("VersionInfo.FileVersion", windows_script)
         create = workflow[workflow.index("gh release create"):workflow.index("--verify-tag --draft")]
         assets = re.findall(r'"(release-assets/[^"\n]+)"', create)
         basenames = [Path(asset).name for asset in assets]
