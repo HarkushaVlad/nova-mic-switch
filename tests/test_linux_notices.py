@@ -24,6 +24,23 @@ class LinuxNoticeTests(unittest.TestCase):
         self.commonroot = self.root / "common"
         self.docroot.mkdir()
         self.commonroot.mkdir()
+
+        original_is_file = Path.is_file
+
+        def posix_exact_common_is_file(path):
+            try:
+                relative = path.relative_to(self.commonroot)
+            except ValueError:
+                return original_is_file(path)
+            if len(relative.parts) != 1:
+                return original_is_file(path)
+            exact_candidate = next((candidate for candidate in path.parent.iterdir()
+                                    if candidate.name == path.name), None)
+            return exact_candidate is not None and original_is_file(exact_candidate)
+
+        exact_common_patch = patch.object(Path, "is_file", autospec=True, side_effect=posix_exact_common_is_file)
+        exact_common_patch.start()
+        self.addCleanup(exact_common_patch.stop)
         self.package = "libfixture1:amd64"
         self.copyright_bytes = (
             b"Fixture copyright text\nLicense: GPL-2+\nSee /usr/share/common-licenses/GPL-2\n"
@@ -201,6 +218,8 @@ class LinuxNoticeTests(unittest.TestCase):
         (self.docroot / "libfixture1" / "copyright").write_bytes(self.copyright_bytes)
         (self.commonroot / "GPL-3").write_bytes(b"GPL 3 canonical text")
         (self.commonroot / "LGPL-2.1").write_bytes(b"LGPL 2.1 canonical text")
+        self.assertTrue((self.commonroot / "LGPL-2.1").is_file())
+        self.assertFalse((self.commonroot / "LGPL-2.1.").is_file())
         result = collector.collect_linux_notices([("lib/x.so", str(self.lib1), "BINARY")], self.out)
         manifest = json.loads(Path(result["manifest"]).read_text())
         refs = {tuple(item.get("references", [])) for item in manifest["texts"] if "common-" in item["path"]}

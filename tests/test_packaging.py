@@ -86,6 +86,11 @@ class PackagingDefinitionTests(unittest.TestCase):
                 return path
             return Path(buffer.value)
 
+        linux_notices_alias = windows_short_path(linux_notices_dir)
+
+        def notice_path_with_parent_alias(path):
+            return linux_notices_alias / path.relative_to(linux_notices_dir)
+
         (licenses_dir / "manifest.json").write_text(
             json.dumps({"texts": [
                 {"destination": "sample-license.txt"},
@@ -116,8 +121,8 @@ class PackagingDefinitionTests(unittest.TestCase):
 
         def fake_collect_linux_notices(*, toc_rows, output_dir):
             linux_notice_calls.append((list(toc_rows), Path(output_dir)))
-            return {"manifest": str(windows_short_path(linux_notice_manifest)),
-                    "files": [str(windows_short_path(path))
+            return {"manifest": str(notice_path_with_parent_alias(linux_notice_manifest)),
+                    "files": [str(notice_path_with_parent_alias(path))
                               for path in (linux_notice_manifest, linux_notice_index, package_notice)]}
 
         linux_notice_module.collect_linux_notices = fake_collect_linux_notices
