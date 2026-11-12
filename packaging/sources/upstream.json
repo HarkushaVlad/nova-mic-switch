@@ -1,0 +1,73 @@
+{
+  "schema_version": 1,
+  "assets": [
+    {
+      "id": "qt-everywhere-src",
+      "filename": "qt-everywhere-src-6.12.0.tar.xz",
+      "version": "6.12.0",
+      "url": "https://download.qt.io/official_releases/qt/6.12/6.12.0/single/qt-everywhere-src-6.12.0.tar.xz",
+      "sha256": "98ff4f44bac6ec3e1e62ee2a4316ae0e3d15badb015d753cc0268a20db52f165",
+      "size_bytes": 443394020,
+      "verification_basis": "Official versioned Qt source listing and pinned SHA-256; canonical download URL may redirect only to the specifically approved versioned mirror URL.",
+      "max_bytes": 500000000
+    },
+    {
+      "id": "pyside-setup",
+      "filename": "pyside-setup-f50facb83fc3dc5f3240c854668c7a6dd93871b2.tar.gz",
+      "version": "6.12.0",
+      "source_commit": "f50facb83fc3dc5f3240c854668c7a6dd93871b2",
+      "url": "https://github.com/pyside/pyside-setup/archive/f50facb83fc3dc5f3240c854668c7a6dd93871b2.tar.gz",
+      "sha256": null,
+      "verification_basis": "HTTPS source archive URL names the specified immutable upstream Git commit; archive SHA-256 is measured locally unless independently published by upstream.",
+      "max_bytes": 1073741824
+    },
+    {
+      "id": "qt5-supermodule-source",
+      "filename": "qt5-ef25002ed292b132d1ed3246bfcee1d24a9cd966.tar.gz",
+      "version": "6.12.0",
+      "source_commit": "ef25002ed292b132d1ed3246bfcee1d24a9cd966",
+      "url": "https://github.com/qt/qt5/archive/ef25002ed292b132d1ed3246bfcee1d24a9cd966.tar.gz",
+      "sha256": null,
+      "verification_basis": "Official GitHub HTTPS archive URL names the immutable Qt qt5 supermodule commit peeled from v6.12.0; SHA-256 is measured locally, not an independent upstream attestation.",
+      "max_bytes": 1073741824
+    },
+    {
+      "id": "ffmpeg",
+      "filename": "ffmpeg-9.0.1.tar.gz",
+      "version": "9.0.1",
+      "source_commit": "bf1b838f2ab88b4f8fd83443325c782ea0e0f7fa",
+      "url": "https://ffmpeg.org/releases/ffmpeg-9.0.1.tar.gz",
+      "sha1": "89c318905212e6b67e10e42ab10ab8007e0aefda",
+      "sha256": null,
+      "verification_basis": "Official FFmpeg versioned HTTPS source archive; verify SHA-1 against the exact Qt v6.12.0 release recipe and record locally measured SHA-256. SHA-1 correspondence is not a cryptographic attestation.",
+      "max_bytes": 1073741824
+    }
+  ],
+  "qt_ffmpeg_recipes": {
+    "repository": "qt/qt5",
+    "tag": "v6.12.0",
+      "tag_object": "41737d37054a9c500b2d0df38199593accb8b5c0",
+    "resolved_commit": "ef25002ed292b132d1ed3246bfcee1d24a9cd966",
+    "archive_filename": "qt-6.12.0-ffmpeg-recipes.tar.gz",
+    "sha256": "6da247fc7a45aa50b3681a0049e29f32e0ed5931927ffe6677917ac22e3c6fad",
+    "verification_basis": "Resolve the official Qt qt5 v6.12.0 tag through GitHub's HTTPS API to its peeled commit; preserve the four source recipe files verbatim with paths and a deterministic local archive. This is a source-material subset, not a complete Qt build environment.",
+    "files": [
+      {
+        "path": "coin/provisioning/common/unix/ffmpeg-installation-utils.sh",
+        "sha256": "28308522279901a565855114f5fcfcdc2d5aeb083f15c50faa9b5664bc305f1e"
+      },
+      {
+        "path": "coin/provisioning/common/windows/install-ffmpeg.ps1",
+        "sha256": "ff062a53615b800df09c43aaa5789f93f0a7ae5afbaf7bc1c35d6ff9e82ba811"
+      },
+      {
+        "path": "coin/provisioning/common/shared/ffmpeg_config_options.txt",
+        "sha256": "5331acdc4bb8689719d6319e3ede3babd46793320d5305128224b4ac19bb810c"
+      },
+      {
+        "path": "coin/provisioning/common/shared/fix_ffmpeg_dependencies.sh",
+        "sha256": "b301bd034f266c332c6ed4d00c12bac33d4c6660489b9da75a0d53949a147eb6"
+      }
+    ]
+  }
+}

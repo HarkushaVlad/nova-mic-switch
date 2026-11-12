@@ -1,0 +1,327 @@
+{
+  "schema_version": 1,
+  "title": "Windows native dependency license and provenance materials",
+  "scope": "Notice and provenance materials for relevant Windows native payloads; not a determination of complete legal compliance or binary inventory.",
+  "components": [
+    {
+      "name": "CPython",
+      "version": "3.13.17",
+      "provenance": "https://github.com/python/cpython/tree/v3.13.17",
+      "applicability": "CPython Windows runtime baseline; copied externals metadata identifies declared external dependencies, not proof of the versions in a built artifact."
+    },
+    {
+      "name": "OpenSSL",
+      "version": "3.5.9",
+      "provenance": "https://github.com/python/cpython-source-deps/tree/openssl-3.5.9",
+      "source_archive_sha256": "d6cf0d9a651f25fe506f6b3dc133a80b9b79a0bc565f570dcf8fdbd597551485",
+      "applicability": "CPython external dependency version basis only; the retained native DLL version/hash requires Windows CI artifact verification."
+    },
+    {
+      "name": "libffi",
+      "version": "3.4.4",
+      "provenance": "https://github.com/python/cpython-source-deps/tree/libffi-3.4.4",
+      "source_archive_sha256": "9d802681adfea27d84cae0487a785fb9caa925bdad44c401b364c59ab2b8edda",
+      "applicability": "CPython external dependency version basis only; not a native DLL attestation."
+    },
+    {
+      "name": "Mesa llvmpipe prebuilt",
+      "version": "11.2.2",
+      "provenance": "Qt provisioning script at Qt 5 release ef25002ed292b132d1ed3246bfcee1d24a9cd966",
+      "applicability": "The Qt-provisioned archive and PySide6_Essentials 6.12.0 wheel DLL have identical raw bytes in all eight PE sections; both contain Mesa 11.2.2 and LLVM 3.6.2 strings. Whole-file hashes differ because Authenticode certificate payloads differ and corresponding PE checksum/security-directory-size fields change; this comparison does not establish reproducible build provenance."
+    },
+    {
+      "name": "Mesa",
+      "version": "11.2.2",
+      "provenance": "https://archive.mesa3d.org/older-versions/11.x/11.2.2/mesa-11.2.2.tar.xz",
+      "applicability": "Source-distribution license materials for Mesa 11.2.2; not proof that the exact prebuilt DLL was built from this archive."
+    },
+    {
+      "name": "Microsoft Visual C++ Redistributable",
+      "version": "Pending Windows CI inventory",
+      "provenance": "https://learn.microsoft.com/en-us/visualstudio/releases/2022/redistribution and https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist?view=msvc-170",
+      "applicability": "Reference documentation only; identify actual redistributable version and review applicable terms before asserting redistribution scope."
+    },
+    {
+      "name": "LLVM",
+      "version": "3.6.2",
+      "provenance": "Official LLVM 3.6.2 source release at https://releases.llvm.org/3.6.2/llvm-3.6.2.src.tar.xz",
+      "source_archive_sha256": "f60dc158bfda6822de167e87275848969f0558b3134892ff54fced87e4667b94",
+      "applicability": "Both the Qt-provisioned Mesa llvmpipe DLL and PySide6_Essentials 6.12.0 wheel DLL contain LLVM 3.6.2 strings; all eight PE raw sections match byte-for-byte. This supports the same code/data payload, while source-to-binary build reproducibility is not claimed."
+    }
+  ],
+  "artifacts": {
+    "qt_llvmpipe_archive": {
+      "filename": "qt-opengl32sw-64-mesa_11_2_2-signed_sha256.7z",
+      "sha256": "c61f801c1760aa24b02c7a8354323cddf368b86f8f5c34b50b3b224f7d728afd",
+      "bytes": 5023568,
+      "pinned_sha1_from_qt_script": "58f948746696b17a594b2f542e87b0e831b28dc3",
+      "member": "opengl32sw.dll",
+      "member_size": 20639888,
+      "member_sha256": "b04de4541863bc7d8879040a78889c4849c1b1da2784c4630f734c146c2998ce",
+      "observed_wheel_dll_sha256": "18aedc7a4b610f53bcc7b7a5c5ed9293c7e86f030e3273ad54ed3bb1ebd36702",
+      "matches_observed_wheel_dll": false,
+      "archive_notice_files_found": [],
+      "dll_file_sha256": "b04de4541863bc7d8879040a78889c4849c1b1da2784c4630f734c146c2998ce",
+      "dll_pe": {
+        "machine": "AMD64 (0x8664)",
+        "optional_header": "PE32+ (0x20b)",
+        "timestamp": 1465899728,
+        "section_count": 8,
+        "resource_directory": {
+          "rva": 0,
+          "size": 0
+        },
+        "security_directory": {
+          "file_offset": 20627456,
+          "size": 12432,
+          "certificate_payload_sha256": "dd80951982156acf1a7cf32d2f56feeab5b8acd61797ab3a92e38756db21fd4f"
+        }
+      }
+    },
+    "mesa_source_archive": {
+      "filename": "mesa-11.2.2.tar.xz",
+      "sha256": "40e148812388ec7c6d7b6657d5a16e2e8dabba8b97ddfceea5197947647bdfb4",
+      "bytes": 7860932,
+      "url": "https://archive.mesa3d.org/older-versions/11.x/11.2.2/mesa-11.2.2.tar.xz"
+    },
+    "pyside6_essentials_wheel": {
+      "filename": "pyside6_essentials-6.12.0-cp310-abi3-win_amd64.whl",
+      "pypi_json_url": "https://pypi.org/pypi/PySide6_Essentials/6.12.0/json",
+      "download_url": "https://files.pythonhosted.org/packages/03/61/9a7e32a37b224f68506785bfb0f288d516098ec71681782d72b695a6c95d/pyside6_essentials-6.12.0-cp310-abi3-win_amd64.whl",
+      "bytes": 82153795,
+      "sha256": "c9a95102aa23c1f86516a30d5a9be37552d324eee7e567eb7508973f1218cb42",
+      "pypi_sha256": "c9a95102aa23c1f86516a30d5a9be37552d324eee7e567eb7508973f1218cb42",
+      "member": "PySide6/opengl32sw.dll",
+      "member_bytes": 20639544,
+      "member_sha256": "18aedc7a4b610f53bcc7b7a5c5ed9293c7e86f030e3273ad54ed3bb1ebd36702",
+      "record_digest": "sha256=GK7cekthD1O8x7elxe2Sk8fobwMOMnOtVO07sevTZwI",
+      "record_digest_verified": true,
+      "record_size_verified": true,
+      "member_pe": {
+        "machine": "AMD64 (0x8664)",
+        "optional_header": "PE32+ (0x20b)",
+        "timestamp": 1465899728,
+        "section_count": 8,
+        "resource_directory": {
+          "rva": 0,
+          "size": 0
+        },
+        "security_directory": {
+          "file_offset": 20627456,
+          "size": 12088,
+          "certificate_payload_sha256": "e08928c7e7c92babb14bc2ebb80654b82a764c6424deb600abcf23cfd3410233"
+        }
+      }
+    },
+    "llvm_source_archive": {
+      "filename": "llvm-3.6.2.src.tar.xz",
+      "url": "https://releases.llvm.org/3.6.2/llvm-3.6.2.src.tar.xz",
+      "bytes": 12802380,
+      "sha256": "f60dc158bfda6822de167e87275848969f0558b3134892ff54fced87e4667b94",
+      "observed_release_strings": [
+        "LLVM (http://llvm.org/): version 3.6.2",
+        "llvm-mc (based on LLVM 3.6.2)"
+      ],
+      "observed_in_both_dlls": true
+    },
+    "pe_payload_comparison": {
+      "qt_archive_dll_sha256": "b04de4541863bc7d8879040a78889c4849c1b1da2784c4630f734c146c2998ce",
+      "pyside6_wheel_dll_sha256": "18aedc7a4b610f53bcc7b7a5c5ed9293c7e86f030e3273ad54ed3bb1ebd36702",
+      "whole_file_sha256_equal": false,
+      "raw_section_count": 8,
+      "all_raw_section_bytes_identical": true,
+      "section_hashes": [
+        {
+          "name": ".text",
+          "raw_size": 14596096,
+          "sha256": "39880e8a7f5ca7e58e7aa0a635508842dace554d77f62267cb2927e48d951307"
+        },
+        {
+          "name": ".rdata",
+          "raw_size": 5155328,
+          "sha256": "bfb5d97db84e01d1a4582b95a2fa089ea1d4334197fb6255c5ad2ddc68728190"
+        },
+        {
+          "name": ".data",
+          "raw_size": 102400,
+          "sha256": "92d30b6c15da74da87b4c3b895c3e8a60011a8148aba544411ba880adead4994"
+        },
+        {
+          "name": ".pdata",
+          "raw_size": 671744,
+          "sha256": "d76fecd0034546cb4ee93b89731499d7fbe090bd902b85ea8e37dbf5f8f6ab38"
+        },
+        {
+          "name": ".gfids",
+          "raw_size": 2560,
+          "sha256": "a5b43c1bda6b3849d8f0ce54e9a963c0bd9db7126628299015c46683a9cc6678"
+        },
+        {
+          "name": ".tls",
+          "raw_size": 512,
+          "sha256": "4c6474903705cb450bb6434c29e8854f17d8324efca1fdb9ee9008599060883a"
+        },
+        {
+          "name": "_RDATA",
+          "raw_size": 6144,
+          "sha256": "1c959b16af1c1954ed8e22d0f900399174496c17c34dcbbde3393b8a0930ac9e"
+        },
+        {
+          "name": ".reloc",
+          "raw_size": 91648,
+          "sha256": "bbb9a7cd9f484b2e2e45681562013b59925909a6d4361b1a71b56bc8207bf0ee"
+        }
+      ],
+      "shared_pe_facts": {
+        "machine": "AMD64 (0x8664)",
+        "optional_header": "PE32+",
+        "timestamp": 1465899728,
+        "section_count": 8,
+        "section_table_identical": true,
+        "resource_directory_absent": true
+      },
+      "differences_outside_raw_sections": [
+        "PE checksum field at file offsets 376-379 differs.",
+        "Security directory size at file offsets 460-463 differs (12432 vs 12088); file offset is 20627456 for both.",
+        "Authenticode certificate-table bytes differ (Qt SHA-256 dd80951982156acf1a7cf32d2f56feeab5b8acd61797ab3a92e38756db21fd4f; wheel SHA-256 e08928c7e7c92babb14bc2ebb80654b82a764c6424deb600abcf23cfd3410233).",
+        "File sizes differ by 344 bytes, exactly the certificate-table size difference."
+      ],
+      "embedded_version_strings": {
+        "mesa": {
+          "version": "11.2.2",
+          "literal": "Mesa 11.2.2",
+          "file_offset": 18391608,
+          "present_in": "PySide6/opengl32sw.dll; same .rdata section bytes as Qt archive DLL"
+        },
+        "llvm": {
+          "version": "3.6.2",
+          "literal": "llvm-mc (based on LLVM 3.6.2)",
+          "file_offset": 17492583,
+          "present_in": "PySide6/opengl32sw.dll; same .rdata section bytes as Qt archive DLL"
+        },
+        "llvm_version_build_literal": "LLVM version 3.6.2; built Jun 14 2016 11:59:14"
+      },
+      "version_info_resource": "No PE resource directory/version-info resource is present; version findings are embedded strings."
+    }
+  },
+  "notice_gaps": [
+    "The Mesa 11.2.2 source tar contains docs/COPYING and docs/license.html; no AUTHORS member was present.",
+    "Actual retained Windows DLL versions and the exact DLL set remain pending Windows CI; CPython version metadata is not binary attestation.",
+    "VC++ redistributable version and terms scope remain pending Windows CI inventory and review.",
+    "The archive has no standalone license or notice members; Mesa 11.2.2 and LLVM 3.6.2 source-release notices are included separately. PE section identity ties the tested wheel payload to Qt-provisioned sections but does not prove the exact source build inputs or complete legal applicability of every component."
+  ],
+  "copied_text_files": [
+    {
+      "destination": "packaging/licenses/windows-native/cpython/externals.spdx.json",
+      "component": "CPython 3.13.17 externals metadata",
+      "original_member_or_source_url": "https://raw.githubusercontent.com/python/cpython/v3.13.17/Misc/externals.spdx.json",
+      "sha256": "887781b9897f94db6e1d487e83475432c1bf4ac34dc6668b2ffd06172008a295",
+      "bytes": 6378,
+      "role": "dependency metadata"
+    },
+    {
+      "destination": "packaging/licenses/windows-native/openssl/README.md",
+      "component": "OpenSSL 3.5.9",
+      "original_member_or_source_url": "https://raw.githubusercontent.com/python/cpython-source-deps/openssl-3.5.9/README.md",
+      "sha256": "f68c351048c11bd8499b9d6ef8b283386d4544cc556fd2679a2ff2b1c50a378b",
+      "bytes": 8137,
+      "role": "upstream README and copyright notice"
+    },
+    {
+      "destination": "packaging/licenses/windows-native/openssl/LICENSE.txt",
+      "component": "OpenSSL 3.5.9",
+      "original_member_or_source_url": "https://raw.githubusercontent.com/python/cpython-source-deps/openssl-3.5.9/LICENSE.txt",
+      "sha256": "7d5450cb2d142651b8afa315b5f238efc805dad827d91ba367d8516bc9d49e7a",
+      "bytes": 10175,
+      "role": "upstream license"
+    },
+    {
+      "destination": "packaging/licenses/windows-native/libffi/LICENSE",
+      "component": "libffi 3.4.4",
+      "original_member_or_source_url": "https://raw.githubusercontent.com/python/cpython-source-deps/libffi-3.4.4/LICENSE",
+      "sha256": "2c9c2acb9743e6b007b91350475308aee44691d96aa20eacef8e199988c8c388",
+      "bytes": 1132,
+      "role": "upstream license"
+    },
+    {
+      "destination": "packaging/licenses/windows-native/mesa/qt-mesa-llvmpipe.ps1",
+      "component": "Mesa llvmpipe prebuilt",
+      "original_member_or_source_url": "https://raw.githubusercontent.com/qt/qt5/ef25002ed292b132d1ed3246bfcee1d24a9cd966/coin/provisioning/common/windows/mesa_llvmpipe.ps1",
+      "sha256": "cd9cf880cbb7d8d749ff743f4237458db25293d6f9a1f1f345a8f6feb651794c",
+      "bytes": 1639,
+      "role": "Qt provisioning provenance and pinned archive checksum"
+    },
+    {
+      "destination": "packaging/licenses/windows-native/mesa/COPYING",
+      "component": "Mesa 11.2.2",
+      "original_member_or_source_url": "mesa-11.2.2/docs/COPYING",
+      "sha256": "e8800bd573e8f844a5b87cf43cc4d55767314b4e95a6092cf26ce9c6ed00b877",
+      "bytes": 25493,
+      "role": "Mesa source distribution license/copyright notice"
+    },
+    {
+      "destination": "packaging/licenses/windows-native/mesa/license.html",
+      "component": "Mesa 11.2.2",
+      "original_member_or_source_url": "mesa-11.2.2/docs/license.html",
+      "sha256": "288ddfae338be168ef2492c21de42ee2f5c8ebc5a734b4e58b37007141bc2d6d",
+      "bytes": 3763,
+      "role": "Mesa source distribution license detail"
+    },
+    {
+      "destination": "packaging/licenses/windows-native/llvm/3.6.2/LICENSE.TXT",
+      "component": "LLVM 3.6.2",
+      "original_member_or_source_url": "llvm-3.6.2.src/LICENSE.TXT",
+      "sha256": "e3bc36440fc927c62d5cc24efeefe225a14d4e34ffeb0c92e430625cce9ee444",
+      "bytes": 3281,
+      "role": "LLVM 3.6.2 release license and third-party notice scope"
+    },
+    {
+      "destination": "packaging/licenses/windows-native/llvm/3.6.2/CREDITS.TXT",
+      "component": "LLVM 3.6.2",
+      "original_member_or_source_url": "llvm-3.6.2.src/CREDITS.TXT",
+      "sha256": "cd09ce4e12a0fa57602dd63537af42cba4a855a482f9ec0830718a7087b77c64",
+      "bytes": 10913,
+      "role": "LLVM source release contributor credits"
+    },
+    {
+      "destination": "packaging/licenses/windows-native/llvm/3.6.2/include/llvm/Support/LICENSE.TXT",
+      "component": "LLVM 3.6.2",
+      "original_member_or_source_url": "llvm-3.6.2.src/include/llvm/Support/LICENSE.TXT",
+      "sha256": "a012d664e4e01df52a65b2eeafdfb8aeb856fec0e6c372265d01b0109c3f5e2a",
+      "bytes": 284,
+      "role": "LLVM System Interface Library additional copyright notice"
+    },
+    {
+      "destination": "packaging/licenses/windows-native/llvm/3.6.2/utils/unittest/googletest/LICENSE.TXT",
+      "component": "LLVM 3.6.2",
+      "original_member_or_source_url": "llvm-3.6.2.src/utils/unittest/googletest/LICENSE.TXT",
+      "sha256": "9702de7e4117a8e2b20dafab11ffda58c198aede066406496bef670d40a22138",
+      "bytes": 1475,
+      "role": "Google Test source-release third-party license"
+    },
+    {
+      "destination": "packaging/licenses/windows-native/llvm/3.6.2/lib/Target/ARM/LICENSE.TXT",
+      "component": "LLVM 3.6.2",
+      "original_member_or_source_url": "llvm-3.6.2.src/lib/Target/ARM/LICENSE.TXT",
+      "sha256": "28cbd5f6dac844fc3d94e879dba83c3ca87328ece8e0d388284f8cec6a042a97",
+      "bytes": 2764,
+      "role": "LLVM source-release ARM contributions license"
+    },
+    {
+      "destination": "packaging/licenses/windows-native/llvm/3.6.2/test/YAMLParser/LICENSE.txt",
+      "component": "LLVM 3.6.2",
+      "original_member_or_source_url": "llvm-3.6.2.src/test/YAMLParser/LICENSE.txt",
+      "sha256": "d0d8b09800a45cd982e9568fc7669d9c1a4c330e275a821bbe24d54366d16fe9",
+      "bytes": 1058,
+      "role": "LLVM source-release YAMLParser test third-party license"
+    },
+    {
+      "destination": "packaging/licenses/windows-native/llvm/3.6.2/autoconf/LICENSE.TXT",
+      "component": "LLVM 3.6.2",
+      "original_member_or_source_url": "llvm-3.6.2.src/autoconf/LICENSE.TXT",
+      "sha256": "a63ee63574ed21e930765c4418a4fa2fa571b72c47cd023ee588dbf8b21fb4ee",
+      "bytes": 1127,
+      "role": "LLVM source-release Autoconf third-party license"
+    }
+  ]
+}

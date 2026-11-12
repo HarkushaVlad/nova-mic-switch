@@ -1,6 +1,7 @@
 from pathlib import Path
 import importlib.util
 import json
+import os
 import sys
 
 from PyInstaller.utils.hooks import collect_data_files, copy_metadata
@@ -93,6 +94,11 @@ def _excluded_unused_qt_plugin(row):
 # Keep ordinary platform input, image/SVG, multimedia/FFmpeg, and any QtQuick closure.
 a.binaries = [row for row in a.binaries if not _excluded_unused_qt_plugin(row)]
 a.datas = [row for row in a.datas if not _excluded_unused_qt_plugin(row)]
+if IS_WINDOWS and os.name == "nt":
+    sys.path.insert(0, str(ROOT / "packaging" / "windows"))
+    from native_policy import apply_windows_native_policy
+
+    apply_windows_native_policy(a, ROOT, ROOT / ".venv", Path(sys.base_prefix))
 
 pyz = PYZ(a.pure)
 exe = EXE(

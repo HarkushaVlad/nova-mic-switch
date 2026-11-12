@@ -1,0 +1,148 @@
+{
+  "schema_version": 1,
+  "provenance_basis": "Initial trust is official upstream GitHub HTTPS source at the pinned commit/release/tag; SHA-256 values are computed from the complete downloaded bytes, not claimed as independent signatures or attestations.",
+  "sources": [
+    {
+      "filename": "type2-runtime-dd6cebe.tar.gz",
+      "url": "https://github.com/AppImage/type2-runtime/archive/dd6cebedcbddde9c82f89b011e8e1d40b6e43868.tar.gz",
+      "ref": "dd6cebedcbddde9c82f89b011e8e1d40b6e43868",
+      "version": "commit dd6cebedcbddde9c82f89b011e8e1d40b6e43868",
+      "archive_bytes": 31069,
+      "archive_sha256": "f5fec23be76e50e2445ed2d018bac49b367490fc483c62c4637e99ec705d27ba",
+      "archive_path": "build/runtime-materials/sources/type2-runtime-dd6cebe.tar.gz",
+      "archive_readable": true
+    },
+    {
+      "filename": "libfuse-3.15.0.tar.xz",
+      "url": "https://github.com/libfuse/libfuse/releases/download/fuse-3.15.0/fuse-3.15.0.tar.xz",
+      "ref": "fuse-3.15.0",
+      "version": "3.15.0",
+      "archive_bytes": 4589124,
+      "archive_sha256": "70589cfd5e1cff7ccd6ac91c86c01be340b227285c5e200baa284e401eea2ca0",
+      "archive_path": "build/runtime-materials/sources/libfuse-3.15.0.tar.xz",
+      "archive_readable": true
+    },
+    {
+      "filename": "squashfuse-0.5.2.tar.gz",
+      "url": "https://github.com/vasi/squashfuse/archive/0.5.2.tar.gz",
+      "ref": "0.5.2",
+      "version": "0.5.2",
+      "archive_bytes": 75404,
+      "archive_sha256": "db0238c5981dabbd80ee09ae15387f390091668ca060a7bc38047912491443d3",
+      "archive_path": "build/runtime-materials/sources/squashfuse-0.5.2.tar.gz",
+      "archive_readable": true
+    }
+  ],
+  "copied_texts": [
+    {
+      "archive": "type2-runtime-dd6cebe.tar.gz",
+      "original_member_path": "type2-runtime-dd6cebedcbddde9c82f89b011e8e1d40b6e43868/LICENSE",
+      "destination": "packaging/licenses/appimage-runtime/type2-runtime/LICENSE",
+      "bytes": 1678,
+      "sha256": "aa154fc9070614bbe7921f89db11efd1dba7a1f3a41685958110e2230f9c0ca1",
+      "actual_license_statement": "MIT License; copyright (c) 2004-23 probonopd. The notice also names statically linked musl, libfuse, squashfuse, libzstd and zlib terms; additional listed static dependencies remain unresolved here."
+    },
+    {
+      "archive": "type2-runtime-dd6cebe.tar.gz",
+      "original_member_path": "type2-runtime-dd6cebedcbddde9c82f89b011e8e1d40b6e43868/src/runtime/Makefile",
+      "destination": "packaging/licenses/appimage-runtime/build-recipes/type2-runtime/src/runtime/Makefile",
+      "bytes": 469,
+      "sha256": "71fd92c0e6c7c10ef5a932f5007e4dc61403ed471330e5841782b4233131b053",
+      "actual_license_statement": "Build recipe; not a license notice."
+    },
+    {
+      "archive": "type2-runtime-dd6cebe.tar.gz",
+      "original_member_path": "type2-runtime-dd6cebedcbddde9c82f89b011e8e1d40b6e43868/scripts/common/install-dependencies.sh",
+      "destination": "packaging/licenses/appimage-runtime/build-recipes/type2-runtime/scripts/common/install-dependencies.sh",
+      "bytes": 1218,
+      "sha256": "45cf79ad6570c75c1f06bcbb629e4d55fbc5c6b1d44e974bb6037b1c209ed170",
+      "actual_license_statement": "Build recipe; not a license notice."
+    },
+    {
+      "archive": "type2-runtime-dd6cebe.tar.gz",
+      "original_member_path": "type2-runtime-dd6cebedcbddde9c82f89b011e8e1d40b6e43868/scripts/chroot/chroot_build.sh",
+      "destination": "packaging/licenses/appimage-runtime/build-recipes/type2-runtime/scripts/chroot/chroot_build.sh",
+      "bytes": 3502,
+      "sha256": "0c4b97491a43d71fa980972311fc9d960dab8b954c70f81a9d62c06661e986ab",
+      "actual_license_statement": "Build recipe; not a license notice."
+    },
+    {
+      "archive": "type2-runtime-dd6cebe.tar.gz",
+      "original_member_path": "type2-runtime-dd6cebedcbddde9c82f89b011e8e1d40b6e43868/patches/libfuse/mount.c.diff",
+      "destination": "packaging/licenses/appimage-runtime/build-recipes/type2-runtime/patches/libfuse/mount.c.diff",
+      "bytes": 3060,
+      "sha256": "1c7fd9e26717545a476b226b083a9f9d05676c180edbd71a04bbd8a73599dc44",
+      "actual_license_statement": "Build patch; not a license notice."
+    },
+    {
+      "archive": "libfuse-3.15.0.tar.xz",
+      "original_member_path": "fuse-3.15.0/LICENSE",
+      "destination": "packaging/licenses/appimage-runtime/libfuse/LICENSE",
+      "bytes": 435,
+      "sha256": "b8832d9caaa075bbbd2aef24efa09f8b7ab66a832812d88c602da0c7b4397fad",
+      "actual_license_statement": "The upstream LICENSE says all include/ and lib/ files and meson.build may be used under GNU LGPL version 2.1; all other files are under GNU GPL version 2. Full terms are in the accompanying LGPL2.txt and GPL2.txt."
+    },
+    {
+      "archive": "libfuse-3.15.0.tar.xz",
+      "original_member_path": "fuse-3.15.0/LGPL2.txt",
+      "destination": "packaging/licenses/appimage-runtime/libfuse/LGPL2.txt",
+      "bytes": 26530,
+      "sha256": "dc626520dcd53a22f727af3ee42c770e56c97a64fe3adb063799d8ab032fe551",
+      "actual_license_statement": "Full text of the GNU Lesser General Public License, version 2.1, referenced by upstream LICENSE."
+    },
+    {
+      "archive": "libfuse-3.15.0.tar.xz",
+      "original_member_path": "fuse-3.15.0/GPL2.txt",
+      "destination": "packaging/licenses/appimage-runtime/libfuse/GPL2.txt",
+      "bytes": 18092,
+      "sha256": "8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643",
+      "actual_license_statement": "Full text of the GNU General Public License, version 2, referenced by upstream LICENSE."
+    },
+    {
+      "archive": "libfuse-3.15.0.tar.xz",
+      "original_member_path": "fuse-3.15.0/AUTHORS",
+      "destination": "packaging/licenses/appimage-runtime/libfuse/AUTHORS",
+      "bytes": 8284,
+      "sha256": "fafe891ac0d23452355fe41d5e5538904fe5324b44cc03f519063e83deb9b0f8",
+      "actual_license_statement": "Maintainer and contributor attribution list; it contains no license grant."
+    },
+    {
+      "archive": "squashfuse-0.5.2.tar.gz",
+      "original_member_path": "squashfuse-0.5.2/LICENSE",
+      "destination": "packaging/licenses/appimage-runtime/squashfuse/LICENSE",
+      "bytes": 1592,
+      "sha256": "9e909cc8a8ba27b1a649c964cf9eda37de911f3138c2b64e6d2f01703904ac13",
+      "actual_license_statement": "The distribution LICENSE states copyright by Dave Vasilevsky and Phillip Lougher, all rights reserved, with source/binary redistribution conditions and an as-is warranty disclaimer; no SPDX classification is inferred."
+    }
+  ],
+  "validation": {
+    "all_three_archives_readable": true,
+    "required_type2_build_files_present": true,
+    "install_script_pins": {
+      "fuse_3_15_0_url": true,
+      "squashfuse_0_5_2_url": true,
+      "fuse_patch_applied": true
+    },
+    "copied_text_sha256_rechecked": true,
+    "copied_text_count": 10
+  },
+  "known_unresolved_static_dependency_notices": [
+    "musl libc",
+    "libzstd",
+    "zlib",
+    "mimalloc"
+  ],
+  "scope_note": "This is a bounded capture of the named runtime/build materials, not a complete legal-coverage determination.",
+  "additional_materials": [
+    {
+      "filename": "type2-runtime-LICENSE.raw",
+      "url": "https://raw.githubusercontent.com/AppImage/type2-runtime/dd6cebedcbddde9c82f89b011e8e1d40b6e43868/LICENSE",
+      "ref": "dd6cebedcbddde9c82f89b011e8e1d40b6e43868",
+      "version": "same commit as type2-runtime",
+      "path": "build/runtime-materials/sources/type2-runtime-LICENSE.raw",
+      "bytes": 1678,
+      "sha256": "aa154fc9070614bbe7921f89db11efd1dba7a1f3a41685958110e2230f9c0ca1",
+      "matches_archive_root_LICENSE": true
+    }
+  ]
+}

@@ -196,6 +196,8 @@ jobs:
           test ! -e "$SMOKE_CONFIG/settings.json" || { echo 'Linux smoke config unexpectedly already has settings.json' >&2; exit 1; }
           timeout 60s env QT_QPA_PLATFORM=offscreen APPIMAGE_EXTRACT_AND_RUN=1 "$APPIMAGE" --safe-mode --config-dir "$SMOKE_CONFIG" --smoke-test
           test ! -e "$SMOKE_CONFIG/settings.json" || { echo 'Safe-mode AppImage smoke test created settings.json' >&2; exit 1; }
+          mkdir -p build/native-evidence/linux
+          timeout 60s env QT_QPA_PLATFORM=offscreen APPIMAGE_EXTRACT_AND_RUN=1 "$APPIMAGE" --media-probe --output-json "$GITHUB_WORKSPACE/build/native-evidence/linux/media-probe.json"
           mkdir -p dist/release/linux-x86_64
           cp "$APPIMAGE" dist/release/linux-x86_64/
           (cd dist/release/linux-x86_64 && sha256sum "NovaMicSwitch-$VERSION-x86_64.AppImage" > SHA256SUMS && cp SHA256SUMS "NovaMicSwitch-$VERSION-x86_64.AppImage.sha256")
@@ -208,6 +210,7 @@ jobs:
           name: native-evidence-linux
           path: |
             build/native-evidence/report.json
+            build/native-evidence/linux/media-probe.json
             build/native-evidence/notices/**/*.txt
           if-no-files-found: error
       - name: Upload Linux release artifact
@@ -268,6 +271,25 @@ jobs:
         run: .\scripts\build_windows.ps1 -InnoSetupCompiler $env:INNO_SETUP_COMPILER
       - name: Generate Windows native dependency evidence
         run: .\.venv\Scripts\python.exe scripts\native_report.py --bundle dist\windows\NovaMicSwitch --workpath build\windows --output-dir build\native-evidence
+      - name: Probe frozen Windows Qt Multimedia backend
+        shell: pwsh
+        run: |
+          $ProbeRoot = Join-Path $env:GITHUB_WORKSPACE 'build\native-evidence\windows'
+          New-Item -ItemType Directory -Force -Path $ProbeRoot | Out-Null
+          $ProbeJson = Join-Path $ProbeRoot 'media-probe.json'
+          $Exe = Join-Path $env:GITHUB_WORKSPACE 'dist\windows\NovaMicSwitch\NovaMicSwitch.exe'
+          $System32 = Join-Path $env:WINDIR 'System32'
+          $env:PATH = $System32
+          $QuotedOutput = '"' + $ProbeJson.Replace('"', '\"') + '"'
+          $Process = Start-Process -FilePath $Exe -ArgumentList @('--media-probe', '--output-json', $QuotedOutput) -PassThru -WindowStyle Hidden
+          if (-not $Process.WaitForExit(60000)) {
+            Stop-Process -Id $Process.Id -Force -ErrorAction SilentlyContinue
+            $Process.WaitForExit()
+            throw 'Frozen Qt Multimedia backend probe exceeded 60 seconds.'
+          }
+          $Process.Refresh()
+          if ($Process.ExitCode -ne 0) { throw "Frozen Qt Multimedia backend probe failed with exit code $($Process.ExitCode)" }
+          if (-not (Test-Path -LiteralPath $ProbeJson -PathType Leaf)) { throw "Frozen backend probe JSON missing: $ProbeJson" }
       - name: Upload Windows native evidence metadata
         if: ${{ !cancelled() && success() && hashFiles('build/native-evidence/report.json') != '' }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -275,6 +297,7 @@ jobs:
           name: native-evidence-windows
           path: |
             build/native-evidence/report.json
+            build/native-evidence/windows/media-probe.json
             build/native-evidence/notices/**/*.txt
           if-no-files-found: error
       - name: Smoke-test frozen Windows executable without opening devices

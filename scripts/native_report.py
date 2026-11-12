@@ -19,6 +19,8 @@ from pathlib import Path
 
 MAX_TEXT_BYTES = 5 * 1024 * 1024
 COMMAND_TIMEOUT_SECONDS = 5
+FFMPEG_PROBE_TIMEOUT_SECONDS = 20
+MAX_FFMPEG_PROBE_OUTPUT_BYTES = 128 * 1024
 SYSTEM_DOCS_ROOT = Path("/usr/share/doc")
 COMMON_LICENSE_ROOT = Path("/usr/share/common-licenses")
 NATIVE_SUFFIXES = (".dll", ".pyd", ".exe")
@@ -28,6 +30,10 @@ FFMPEG_LIBRARIES = {
     "avformat": "avformat",
     "swresample": "swresample",
     "swscale": "swscale",
+}
+CPYTHON_VC_RUNTIME_DLLS = {
+    "vcruntime140.dll", "vcruntime140_1.dll", "msvcp140.dll", "msvcp140_1.dll",
+    "msvcp140_2.dll", "concrt140.dll", "vcomp140.dll",
 }
 
 
@@ -175,6 +181,14 @@ def _is_python_runtime_source(path: Path) -> bool:
     return False
 
 
+def _is_cpython_vc_runtime(path: Path) -> bool:
+    if path.name.casefold() not in CPYTHON_VC_RUNTIME_DLLS:
+        return False
+    if any(part.casefold() in {"site-packages", "dist-packages"} for part in path.parts):
+        return False
+    return any(_under(path, prefix) for prefix in {Path(sys.base_prefix), Path(sys.prefix)})
+
+
 def _run_dpkg(arguments: list[str]) -> tuple[str, str]:
     try:
         result = subprocess.run(
@@ -191,15 +205,45 @@ def _run_dpkg(arguments: list[str]) -> tuple[str, str]:
 
 
 def _package_for_path(path: Path) -> str | None:
-    if not (str(path).startswith("/usr/lib/") or str(path).startswith("/lib/")):
-        return None
-    for candidate in dict.fromkeys((path, path.resolve())):
+    candidates = []
+    for candidate in (path, path.resolve()):
+        if candidate not in candidates:
+            candidates.append(candidate)
+    for candidate in tuple(candidates):
+        alias = _usrmerge_alias(candidate)
+        if alias is not None and alias not in candidates and _same_existing_file(candidate, alias):
+            candidates.append(alias)
+    for candidate in candidates:
+        if not _is_system_library_path(candidate) or not candidate.is_file():
+            continue
         output, _error = _run_dpkg(["-S", str(candidate)])
         for line in output.splitlines():
             owner, separator, _owned_path = line.partition(": ")
             if separator and owner:
                 return owner.split(",", 1)[0].strip()
     return None
+
+
+def _is_system_library_path(path: Path) -> bool:
+    value = str(path)
+    return value.startswith(("/usr/lib/", "/lib/", "/usr/lib64/", "/lib64/"))
+
+
+def _usrmerge_alias(path: Path) -> Path | None:
+    value = str(path)
+    for canonical, merged in (("/usr/lib/", "/lib/"), ("/usr/lib64/", "/lib64/")):
+        if value.startswith(canonical):
+            return Path(merged + value[len(canonical):])
+        if value.startswith(merged):
+            return Path(canonical + value[len(merged):])
+    return None
+
+
+def _same_existing_file(left: Path, right: Path) -> bool:
+    try:
+        return right.is_file() and os.path.samefile(left, right)
+    except OSError:
+        return False
 
 
 def _safe_notice_name(value: str) -> str:
@@ -277,6 +321,24 @@ def _provider_for(source: Path | None, relative_path: str, wheel_owners: dict[st
                 "source_package": name, "source_version": version, "noticefiles": [],
                 "notice_status": "not-collected",
             }
+        if _is_cpython_vc_runtime(source):
+            python_version = sys.version.split()[0]
+            return {
+                "provider": {
+                    "name": "Microsoft Visual C++ Runtime (supplied with CPython)",
+                    "version": None,
+                    "kind": "microsoft-vc-runtime",
+                },
+                "source_package": "CPython",
+                "source_version": python_version,
+                "noticefiles": [],
+                "notice_status": "not-collected",
+                "distribution_provenance": {
+                    "name": "CPython",
+                    "version": python_version,
+                    "detail": "Microsoft runtime DLL supplied with the CPython distribution",
+                },
+            }
         if sys.platform.startswith("linux"):
             host = _host_provider(source, output_dir, notice_cache)
             if host:
@@ -309,50 +371,189 @@ def _decode_c_string(value) -> str | None:
     return str(value)
 
 
-def _ffmpeg_evidence(bundle: Path) -> list[dict]:
-    binaries = [path for path in bundle.rglob("*") if path.is_file() and path.suffix.lower() != ".exe"]
-    results = []
+def _ffmpeg_bundle_paths(bundle: Path) -> list[dict[str, str]]:
+    paths = []
+    for path in sorted(item for item in bundle.rglob("*") if item.is_file() and item.suffix.lower() != ".exe"):
+        lower_name = path.name.casefold()
+        if not (".so" in lower_name or path.suffix.casefold() in {".dll", ".dylib"}):
+            continue
+        for prefix in FFMPEG_LIBRARIES:
+            if lower_name.startswith((prefix.casefold(), f"lib{prefix.casefold()}")):
+                paths.append({"prefix": prefix, "path": str(path.resolve())})
+                break
+    return paths
+
+
+def _probe_ffmpeg_library(path: Path, prefix: str, library_handles: list) -> dict:
+    item = {
+        "probe_kind": "raw_library_probe",
+        "library_loaded": False,
+        "load_error": None,
+    }
+    try:
+        library = ctypes.CDLL(str(path))
+        library_handles.append(library)
+        item["library_loaded"] = True
+        version_function = getattr(library, f"{prefix}_version")
+        version_function.argtypes = []
+        version_function.restype = ctypes.c_uint
+        configuration_function = getattr(library, f"{prefix}_configuration")
+        configuration_function.argtypes = []
+        configuration_function.restype = ctypes.c_char_p
+        license_function = getattr(library, f"{prefix}_license")
+        license_function.argtypes = []
+        license_function.restype = ctypes.c_char_p
+        version_number = int(version_function())
+        item.update({
+            "version_number": version_number,
+            "version": f"{version_number >> 16}.{(version_number >> 8) & 255}.{version_number & 255}",
+            "configuration": _decode_c_string(configuration_function()),
+            "license": _decode_c_string(license_function()),
+        })
+    except Exception as exc:
+        item["load_error"] = f"{type(exc).__name__}: {exc}"[:1000]
+    return item
+
+
+def _ffmpeg_probe_child(payload: dict) -> dict:
+    bundle = Path(payload["bundle"]).resolve(strict=True)
+    if not bundle.is_dir() or not isinstance(payload.get("libraries"), list):
+        raise ValueError("invalid bundle or library list")
+    libraries = []
+    for entry in payload["libraries"]:
+        if not isinstance(entry, dict) or entry.get("prefix") not in FFMPEG_LIBRARIES:
+            raise ValueError("invalid FFmpeg library entry")
+        library_path = Path(entry.get("path", ""))
+        if not library_path.is_absolute():
+            raise ValueError("FFmpeg library path must be absolute")
+        library_path = library_path.resolve(strict=True)
+        library_path.relative_to(bundle)
+        if not library_path.is_file():
+            raise ValueError("FFmpeg library path is not a file")
+        libraries.append({"prefix": entry["prefix"], "path": library_path})
+
     dll_handles = []
     if os.name == "nt" and hasattr(os, "add_dll_directory"):
-        for directory in sorted({path.parent for path in binaries if path.suffix.lower() == ".dll"}):
+        for directory in sorted({entry["path"].parent for entry in libraries if entry["path"].suffix.casefold() == ".dll"}):
             try:
                 dll_handles.append(os.add_dll_directory(str(directory)))
             except OSError:
                 continue
+
+    library_handles = []
     try:
-        for prefix, symbol_prefix in FFMPEG_LIBRARIES.items():
-            candidates = [
-                path for path in binaries
-                if path.name.lower().startswith((prefix.lower(), f"lib{prefix.lower()}"))
-                and (".so" in path.name.lower() or path.suffix.lower() in (".dll", ".dylib"))
-            ]
-            for library_path in sorted(candidates):
-                item = {"path": library_path.relative_to(bundle).as_posix(), "load_error": None}
-                try:
-                    library = ctypes.CDLL(str(library_path))
-                    version_function = getattr(library, f"{symbol_prefix}_version")
-                    version_function.argtypes = []
-                    version_function.restype = ctypes.c_uint
-                    configuration_function = getattr(library, f"{symbol_prefix}_configuration")
-                    configuration_function.argtypes = []
-                    configuration_function.restype = ctypes.c_char_p
-                    license_function = getattr(library, f"{symbol_prefix}_license")
-                    license_function.argtypes = []
-                    license_function.restype = ctypes.c_char_p
-                    version_number = int(version_function())
-                    item.update({
-                        "version_number": version_number,
-                        "version": f"{version_number >> 16}.{(version_number >> 8) & 255}.{version_number & 255}",
-                        "configuration": _decode_c_string(configuration_function()),
-                        "license": _decode_c_string(license_function()),
-                    })
-                except Exception as exc:
-                    item["load_error"] = f"{type(exc).__name__}: {exc}"
-                results.append(item)
+        results = []
+        for prefix in FFMPEG_LIBRARIES:
+            for entry in (item for item in libraries if item["prefix"] == prefix):
+                probe = _probe_ffmpeg_library(entry["path"], prefix, library_handles)
+                results.append({"relative_path": entry["path"].relative_to(bundle).as_posix(), **probe})
+
+        avformat_loaded = any(
+            result["probe_kind"] == "raw_library_probe"
+            and next(entry["prefix"] for entry in libraries if entry["path"].relative_to(bundle).as_posix() == result["relative_path"]) == "avformat"
+            and result["library_loaded"]
+            for result in results
+        )
+        for result in results:
+            matching = next(
+                entry for entry in libraries
+                if entry["path"].relative_to(bundle).as_posix() == result["relative_path"]
+            )
+            if matching["prefix"] not in {"avutil", "avcodec"}:
+                continue
+            if result["load_error"] is None:
+                result["retry_after_avformat"] = {"status": "not_needed", "detail": "initial probe succeeded"}
+            elif not avformat_loaded:
+                result["retry_after_avformat"] = {
+                    "status": "not_attempted", "detail": "no avformat library loaded successfully",
+                }
+            else:
+                result["retry_after_avformat"] = _probe_ffmpeg_library(
+                    matching["path"], matching["prefix"], library_handles,
+                )
+        return {"results": results}
     finally:
         for handle in dll_handles:
             handle.close()
-    return results
+
+
+def _ffmpeg_probe_child_main() -> int:
+    try:
+        request = sys.stdin.read(MAX_TEXT_BYTES + 1)
+        if len(request.encode("utf-8")) > MAX_TEXT_BYTES:
+            raise ValueError("FFmpeg probe request exceeded 5 MiB")
+        payload = json.loads(request)
+        response = _ffmpeg_probe_child(payload)
+        encoded = json.dumps(response, separators=(",", ":"))
+        if len(encoded.encode("utf-8")) > MAX_FFMPEG_PROBE_OUTPUT_BYTES:
+            raise ValueError("FFmpeg probe response exceeded the output limit")
+        print(encoded)
+        return 0
+    except Exception as exc:
+        print(f"FFmpeg probe child failed: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return 2
+
+
+def _ffmpeg_probe_subprocess(bundle: Path, libraries: list[dict[str, str]]) -> dict:
+    request = json.dumps({"bundle": str(bundle.resolve()), "libraries": libraries})
+    try:
+        result = subprocess.run(
+            [sys.executable, str(Path(__file__).resolve()), "--_probe-ffmpeg"],
+            input=request, check=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            text=True, encoding="utf-8", errors="replace", timeout=FFMPEG_PROBE_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return {"error": f"FFmpeg probe subprocess failed: {type(exc).__name__}: {exc}"[:1000]}
+    output_bytes = len(result.stdout.encode("utf-8", errors="replace"))
+    error_bytes = len(result.stderr.encode("utf-8", errors="replace"))
+    if output_bytes + error_bytes > MAX_FFMPEG_PROBE_OUTPUT_BYTES:
+        return {"error": "FFmpeg probe subprocess output exceeded 128 KiB"}
+    if result.returncode != 0:
+        detail = result.stderr.strip()[:500]
+        return {"error": f"FFmpeg probe child exited with status {result.returncode}" + (f": {detail}" if detail else "")}
+    try:
+        response = json.loads(result.stdout)
+    except (json.JSONDecodeError, TypeError) as exc:
+        return {"error": f"FFmpeg probe child returned malformed JSON: {exc}"[:1000]}
+    if not isinstance(response, dict) or not isinstance(response.get("results"), list):
+        return {"error": "FFmpeg probe child returned an invalid response shape"}
+    return response
+
+
+def _ffmpeg_evidence(bundle: Path) -> list[dict]:
+    libraries = _ffmpeg_bundle_paths(bundle)
+    if not libraries:
+        return []
+    response = _ffmpeg_probe_subprocess(bundle, libraries)
+    if "error" in response:
+        return [
+            {
+                "path": Path(entry["path"]).relative_to(bundle).as_posix(),
+                "probe_kind": "raw_library_probe",
+                "load_error": response["error"],
+            }
+            for entry in libraries
+        ]
+    expected = {
+        Path(entry["path"]).relative_to(bundle).as_posix(): entry
+        for entry in libraries
+    }
+    received = {}
+    for result in response["results"]:
+        if isinstance(result, dict) and result.get("relative_path") in expected:
+            received[result["relative_path"]] = result
+    evidence = []
+    for relative_path in expected:
+        result = received.get(relative_path)
+        if result is None:
+            result = {
+                "load_error": "FFmpeg probe child omitted this bundle library",
+                "probe_kind": "raw_library_probe",
+            }
+        else:
+            result = {key: value for key, value in result.items() if key != "relative_path"}
+        evidence.append({"path": relative_path, **result})
+    return evidence
 
 
 def build_report(bundle: Path, workpath: Path, output_dir: Path) -> dict:
@@ -418,4 +619,6 @@ def main(argv=None) -> int:
 
 
 if __name__ == "__main__":
+    if sys.argv[1:] == ["--_probe-ffmpeg"]:
+        raise SystemExit(_ffmpeg_probe_child_main())
     raise SystemExit(main())

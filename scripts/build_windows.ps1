@@ -38,18 +38,38 @@ try {
     $Python = Join-Path $Root '.venv\Scripts\python.exe'
     $PythonVersion = & $Python -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")'
     if ($LASTEXITCODE -ne 0 -or $PythonVersion -ne '3.13') { throw "Expected Python 3.13 in the project environment, got $PythonVersion" }
-    & (Join-Path $Root '.venv\Scripts\pyinstaller.exe') --noconfirm --clean `
-        --distpath (Join-Path $Root 'dist\windows') --workpath (Join-Path $Root 'build\windows') `
-        (Join-Path $Root 'packaging\nova-mic-switch.spec')
-    if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed with exit code $LASTEXITCODE" }
-    $Bundle = Join-Path $Root 'dist\windows\NovaMicSwitch'
-    Write-Output "Windows bundle created at $Bundle"
-
     $Compiler = $InnoSetupCompiler
     if (-not $Compiler) {
         $Found = Get-Command ISCC.exe -ErrorAction SilentlyContinue
         if ($Found) { $Compiler = $Found.Source }
     }
+    if ($Compiler -and (Test-Path -LiteralPath $Compiler -PathType Leaf)) {
+        $Compiler = (Resolve-Path -LiteralPath $Compiler).Path
+    }
+    $PythonPaths = & $Python -c 'import json,sys,sysconfig; print(json.dumps([sys.prefix,sys.base_prefix,sysconfig.get_config_var("BINDIR"),sysconfig.get_config_var("DLLLIBRARY")]))'
+    if ($LASTEXITCODE -ne 0) { throw 'Could not resolve the active Python installation paths.' }
+    $PythonInfo = $PythonPaths | ConvertFrom-Json
+    $PythonBase = [System.IO.Path]::GetFullPath([string]$PythonInfo[1])
+    $PythonDlls = Join-Path $PythonBase 'DLLs'
+    $PythonScripts = Join-Path $Root '.venv\Scripts'
+    $WindowsRoot = $env:SystemRoot
+    $AllowedPath = @($PythonScripts, $PythonBase, $PythonDlls, (Join-Path $WindowsRoot 'System32'), $WindowsRoot) |
+        Where-Object { Test-Path -LiteralPath $_ -PathType Container } |
+        ForEach-Object { [System.IO.Path]::GetFullPath($_) } |
+        Select-Object -Unique
+    $InheritedPath = $env:PATH
+    try {
+        $env:PATH = $AllowedPath -join [System.IO.Path]::PathSeparator
+        & $Python -m PyInstaller --noconfirm --clean `
+            --distpath (Join-Path $Root 'dist\windows') --workpath (Join-Path $Root 'build\windows') `
+            (Join-Path $Root 'packaging\nova-mic-switch.spec')
+        if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed with exit code $LASTEXITCODE" }
+    } finally {
+        $env:PATH = $InheritedPath
+    }
+    $Bundle = Join-Path $Root 'dist\windows\NovaMicSwitch'
+    Write-Output "Windows bundle created at $Bundle"
+
     if ($Compiler) {
         if (-not (Test-Path -LiteralPath $Compiler -PathType Leaf)) {
             throw "Inno Setup compiler not found: $Compiler"

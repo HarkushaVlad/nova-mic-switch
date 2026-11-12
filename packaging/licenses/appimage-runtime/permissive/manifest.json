@@ -1,0 +1,101 @@
+{
+  "scope": "Four captured upstream permissive license notices only; this is not a compliance attestation for the whole runtime binary.",
+  "runtime_evidence": {
+    "path": "build/release-tools/runtime-x86_64",
+    "sha256": "2fca8b443c92510f1483a883f60061ad09b46b978b2631c807cd873a47ec260d",
+    "strings_offsets": {
+      "zstd_version": "0x899f2",
+      "zlib_version": "0x89b70",
+      "squashfuse": "0x896f1",
+      "runtime_other_version": "0x89e08",
+      "inflate_copyright": "0x90a20"
+    },
+    "observed_strings": {
+      "zstd_version": "1.5.6",
+      "zlib_version": "1.3.1",
+      "squashfuse": "squashfuse 0.5.2",
+      "runtime_other_version": "3.15.0",
+      "inflate_copyright": "inflate 1.3.1 Copyright 1995-2024 Mark Adler"
+    },
+    "version_uncertainty": {
+      "zlib": "1.3.1 supported by binary version string and inflate copyright",
+      "zstd": "1.5.6 supported by binary version string and known Alpine 3.21 runtime context",
+      "musl": "1.2.5 is a versioned official notice candidate; exact runtime minor version unverified",
+      "mimalloc": "2.1.7 is a versioned official notice candidate; exact runtime minor version unverified"
+    },
+    "copyright_context": "The captured zlib 1.3.1 notice is preserved verbatim; its notice copyright and the binary inflate copyright are separate contexts."
+  },
+  "materials": [
+    {
+      "component": "zlib",
+      "version_reference": "1.3.1",
+      "origin_url": "https://raw.githubusercontent.com/madler/zlib/v1.3.1/LICENSE",
+      "final_url": "https://raw.githubusercontent.com/madler/zlib/v1.3.1/LICENSE",
+      "http_status": 200,
+      "path": "zlib/LICENSE",
+      "encoding": "UTF-8",
+      "size_bytes": 1002,
+      "sha256": "845efc77857d485d91fb3e0b884aaa929368c717ae8186b66fe1ed2495753243",
+      "license_as_stated": "zlib License (license text; project does not label it by SPDX identifier)",
+      "copyright_lines_exact": [
+        " (C) 1995-2022 Jean-loup Gailly and Mark Adler"
+      ]
+    },
+    {
+      "component": "zstd",
+      "version_reference": "1.5.6",
+      "origin_url": "https://raw.githubusercontent.com/facebook/zstd/v1.5.6/LICENSE",
+      "final_url": "https://raw.githubusercontent.com/facebook/zstd/v1.5.6/LICENSE",
+      "http_status": 200,
+      "path": "zstd/LICENSE",
+      "encoding": "UTF-8",
+      "size_bytes": 1549,
+      "sha256": "7055266497633c9025b777c78eb7235af13922117480ed5c674677adc381c9d8",
+      "license_as_stated": "BSD 3-Clause License",
+      "copyright_lines_exact": [
+        "Copyright (c) Meta Platforms, Inc. and affiliates. All rights reserved."
+      ]
+    },
+    {
+      "component": "musl",
+      "version_reference": "1.2.5 candidate",
+      "origin_url": "https://git.musl-libc.org/cgit/musl/plain/COPYRIGHT?h=v1.2.5",
+      "final_url": "https://git.musl-libc.org/cgit/musl/plain/COPYRIGHT?h=v1.2.5",
+      "http_status": 200,
+      "path": "musl/LICENSE",
+      "encoding": "UTF-8",
+      "size_bytes": 6204,
+      "sha256": "f9bc4423732350eb0b3f7ed7e91d530298476f8fec0c6c427a1c04ade22655af",
+      "license_as_stated": "MIT License",
+      "copyright_lines_exact": [
+        "Copyright © 2005-2020 Rich Felker, et al.",
+        "src/regex/tre*) is Copyright © 2001-2008 Ville Laurikari and licensed",
+        "Copyright © 1993,2004 Sun Microsystems or",
+        "Copyright © 2003-2011 David Schultz or",
+        "Copyright © 2003-2009 Steven G. Kargl or",
+        "Copyright © 2003-2009 Bruce D. Evans or",
+        "Copyright © 2008 Stephen L. Moshier or",
+        "Copyright © 2017-2018 Arm Limited",
+        "The ARM memcpy code (src/string/arm/memcpy.S) is Copyright © 2008",
+        "Copyright © 1999-2019, Arm Limited.",
+        "Copyright © 1994 David Burren. It is licensed under a BSD license.",
+        "The smoothsort implementation (src/stdlib/qsort.c) is Copyright © 2011"
+      ]
+    },
+    {
+      "component": "mimalloc",
+      "version_reference": "2.1.7",
+      "origin_url": "https://raw.githubusercontent.com/microsoft/mimalloc/v2.1.7/LICENSE",
+      "final_url": "https://raw.githubusercontent.com/microsoft/mimalloc/v2.1.7/LICENSE",
+      "http_status": 200,
+      "path": "mimalloc/LICENSE",
+      "encoding": "UTF-8",
+      "size_bytes": 1096,
+      "sha256": "19c99805e7a44a34b297a75d1edea9985e300066dfc024d5c99d4236d4573b5d",
+      "license_as_stated": "MIT License",
+      "copyright_lines_exact": [
+        "Copyright (c) 2018-2021 Microsoft Corporation, Daan Leijen"
+      ]
+    }
+  ]
+}

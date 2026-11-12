@@ -303,6 +303,27 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("With `license_reviewed` false", docs)
         self.assertIn("no downloadable binaries", docs)
 
+    def test_frozen_media_probe_runs_with_bounded_timeouts_and_is_metadata_only(self):
+        workflow = (ROOT / ".github" / "workflows" / "build-release.yml").read_text(encoding="utf-8")
+        linux_job = workflow[workflow.index("  linux-x86_64:"):workflow.index("  windows-x64:")]
+        windows_job = workflow[workflow.index("  windows-x64:"):workflow.index("  publish-draft:")]
+        self.assertIn('timeout 60s env QT_QPA_PLATFORM=offscreen APPIMAGE_EXTRACT_AND_RUN=1 "$APPIMAGE" --media-probe --output-json', linux_job)
+        self.assertIn("build/native-evidence/linux/media-probe.json", linux_job)
+        self.assertIn("--media-probe", windows_job)
+        self.assertIn("build/native-evidence/windows/media-probe.json", windows_job)
+        self.assertIn("WaitForExit(60000)", windows_job)
+        self.assertIn("Stop-Process -Id $Process.Id", windows_job)
+        self.assertIn("$env:PATH = $System32", windows_job)
+        self.assertIn("build/native-evidence/linux/media-probe.json", linux_job)
+        self.assertIn("build/native-evidence/windows/media-probe.json", windows_job)
+        self.assertIn("license_reviewed:", workflow)
+        self.assertIn("default: false", workflow)
+        self.assertEqual(workflow.count("if: ${{ inputs.license_reviewed }}"), 2)
+        for upload in (linux_job, windows_job):
+            self.assertIn("build/native-evidence/report.json", upload)
+            self.assertIn("build/native-evidence/notices/**/*.txt", upload)
+            self.assertNotIn("build/native-evidence/**/silent.wav", upload)
+
 
 if __name__ == "__main__":
     unittest.main()
