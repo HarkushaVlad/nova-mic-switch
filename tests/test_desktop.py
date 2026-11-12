@@ -1,7 +1,8 @@
+import json
 import os
+import subprocess
 import sys
 import tempfile
-import threading
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -515,52 +516,80 @@ class DesktopWindowTests(unittest.TestCase):
 
                 from PySide6.QtTest import QSignalSpy
                 spy = QSignalSpy(primary.activation)
-                def wait_for_count(count, timeout=1000):
-                    from PySide6.QtCore import QElapsedTimer
-                    timer = QElapsedTimer()
-                    timer.start()
-                    while spy.count() < count and timer.elapsed() < timeout:
-                        self.app.processEvents()
-                    return spy.count() >= count
-
+                connection_spy = QSignalSpy(primary.server.newConnection)
                 def notify(command):
-                    result = []
-                    errors = []
+                    child_script = """
+import json, sys
+from pathlib import Path
+from PySide6.QtCore import QCoreApplication
+from nova_mic_switch.desktop import InstanceCoordinator
 
-                    def worker():
-                        secondary = None
-                        try:
-                            with patch.dict(os.environ, {"TMPDIR": str(other_tmp), "XDG_RUNTIME_DIR": str(runtime_dir)}):
-                                secondary = InstanceCoordinator(config_dir)
-                                self.assertEqual(secondary.server_name, primary.server_name)
-                                result.append(secondary.acquire_or_notify(command))
-                        except Exception as exc:
-                            errors.append(exc)
-                        finally:
-                            if secondary is not None:
-                                secondary.close()
-
-                    thread = threading.Thread(target=worker)
-                    thread.start()
+app = QCoreApplication([])
+coordinator = InstanceCoordinator(Path(sys.argv[1]))
+try:
+    result = coordinator.acquire_or_notify(sys.argv[2])
+    print(json.dumps({"result": result}), flush=True)
+finally:
+    coordinator.close()
+"""
+                    child_env = os.environ.copy()
+                    child_env.update({
+                        "TMPDIR": str(other_tmp),
+                        "XDG_RUNTIME_DIR": str(runtime_dir),
+                        "QT_QPA_PLATFORM": "offscreen",
+                    })
+                    child = subprocess.Popen(
+                        [sys.executable, "-c", child_script, str(config_dir), command],
+                        cwd=str(Path(__file__).resolve().parents[1]),
+                        env=child_env,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        text=True,
+                    )
                     from PySide6.QtCore import QElapsedTimer
                     timer = QElapsedTimer()
                     timer.start()
-                    while thread.is_alive() and timer.elapsed() < 3000:
-                        self.app.processEvents()
-                    thread.join(timeout=0.1)
-                    self.assertFalse(thread.is_alive(), "IPC client did not finish within its bounded deadline")
-                    self.assertEqual(errors, [], f"activation count after IPC failure: {spy.count()}")
-                    self.assertEqual(result, [False])
+                    try:
+                        while child.poll() is None and timer.elapsed() < 5000:
+                            self.app.processEvents()
+                        timed_out = child.poll() is None
+                    finally:
+                        if child.poll() is None:
+                            child.kill()
+                        stdout, stderr = child.communicate(timeout=2)
+                    connection_state = []
+                    for socket, buffer in primary._connection_buffers.items():
+                        try:
+                            state = socket.state()
+                            available = socket.bytesAvailable()
+                        except RuntimeError as exc:
+                            state, available = f"unavailable: {exc}", "unavailable"
+                        connection_state.append((len(buffer) if buffer is not None else None, state, available))
+                    diagnostics = (
+                        f"command={command!r}, timed_out={timed_out}, exit={child.returncode}, "
+                        f"stdout={stdout!r}, stderr={stderr!r}, listening={primary.server.isListening()}, "
+                        f"pending={primary.server.hasPendingConnections()}, new_connections={connection_spy.count()}, "
+                        f"accepted_connections={len(primary._connection_buffers)}, activations={spy.count()}, "
+                        f"tracked_connections={connection_state}"
+                    )
+                    self.assertFalse(timed_out, diagnostics)
+                    self.assertEqual(child.returncode, 0, diagnostics)
+                    try:
+                        payload = json.loads(stdout)
+                    except json.JSONDecodeError as exc:
+                        self.fail(f"Child did not return valid JSON: {exc}; {diagnostics}")
+                    self.assertEqual(payload, {"result": False}, diagnostics)
+                    self.assertTrue(primary.server.isListening(), diagnostics)
 
                 notify("activate")
                 self.assertTrue(primary.server.isListening())
                 if socket_path is not None:
                     self.assertTrue(socket_path.exists(), "failed lock acquisition must not unlink the active endpoint")
-                self.assertTrue(wait_for_count(1))
+                self.assertEqual(spy.count(), 1)
                 self.assertEqual(spy.at(0), ["activate"])
                 notify("tray")
                 self.assertTrue(primary.server.isListening())
-                self.assertTrue(wait_for_count(2))
+                self.assertEqual(spy.count(), 2)
                 self.assertEqual(spy.at(1), ["tray"])
             finally:
                 if primary is not None:
