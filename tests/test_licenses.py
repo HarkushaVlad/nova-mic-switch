@@ -47,9 +47,9 @@ class LicenseCollectorTests(unittest.TestCase):
             "packaging/licenses/windows-native",
         ):
             shutil.copytree(ROOT / relative, self.fixture_root / relative)
-        (self.fixture_root / "docs").mkdir(parents=True)
         shutil.copy2(ROOT / "LICENSE", self.fixture_root / "LICENSE")
-        shutil.copy2(ROOT / "docs/LIBRARY-REPLACEMENT.md", self.fixture_root / "docs/LIBRARY-REPLACEMENT.md")
+        shutil.copy2(ROOT / "packaging/licenses/LIBRARY-REPLACEMENT.md",
+                     self.fixture_root / "packaging/licenses/LIBRARY-REPLACEMENT.md")
         self.fake_dists = {name: FakeDistribution(name) for name in collector.COLLECT_DISTRIBUTIONS}
         for name in collector.QT_DISTRIBUTIONS:
             self.fake_dists[name] = FakeDistribution(name, collector.QT_VERSION)
@@ -140,7 +140,7 @@ class LicenseCollectorTests(unittest.TestCase):
                 initial = cached["input_snapshot_sha256"]
                 self.assertEqual((output / f"{('qt-native', 'appimage-runtime', 'appimage-runtime/permissive')[index]}/manifest.json").read_bytes(), source.read_bytes())
             for source, destination in ((self.fixture_root / "LICENSE", "LICENSE.txt"),
-                                        (self.fixture_root / "docs/LIBRARY-REPLACEMENT.md", "LIBRARY-REPLACEMENT.md")):
+                                        (self.fixture_root / "packaging/licenses/LIBRARY-REPLACEMENT.md", "LIBRARY-REPLACEMENT.md")):
                 source.write_bytes(source.read_bytes() + b"\n")
                 previous = initial
                 collector.ensure_licenses(output, distributions=self.fake_dists, python_license=self.python_text)

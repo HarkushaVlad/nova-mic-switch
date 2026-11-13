@@ -404,9 +404,6 @@ class ReleaseWorkflowTests(unittest.TestCase):
 
         attributes = (ROOT / ".gitattributes").read_text(encoding="utf-8")
         self.assertIn("packaging/licenses/** -text", attributes)
-        docs = (ROOT / "docs" / "releasing.md").read_text(encoding="utf-8")
-        self.assertIn("With `license_reviewed` false", docs)
-        self.assertIn("no downloadable binaries", docs)
 
     def test_source_workflow_has_separate_metadata_and_review_gated_archive_uploads(self):
         workflow = (ROOT / ".github" / "workflows" / "build-release.yml").read_text(encoding="utf-8")

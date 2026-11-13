@@ -268,6 +268,8 @@ class ReleaseSourceTests(unittest.TestCase):
             self.assertIn("project/scripts/collect_linux_notices.py", by_name)
             self.assertIn("project/packaging/windows/runtime_terms.py", by_name)
             self.assertIn("project/packaging/windows/MICROSOFT-RUNTIME-TERMS.txt", by_name)
+            self.assertIn("project/packaging/licenses/LIBRARY-REPLACEMENT.md", by_name)
+            self.assertIn("project/packaging/linux/99-nova-5p-hidraw.rules.example", by_name)
             self.assertEqual(by_name["project/packaging/linux/AppRun"].mode, 0o755)
             self.assertEqual(by_name["project/scripts/build_appimage.sh"].mode, 0o755)
             self.assertEqual(by_name["project/scripts/build_linux.sh"].mode, 0o755)

@@ -302,7 +302,7 @@ def _additional_materials() -> tuple[list[dict[str, object]], list[dict[str, str
 
     for source_path, destination, kind, label in (
         (ROOT / "LICENSE", "LICENSE.txt", "project license", "Nova Mic Switch project MIT license"),
-        (ROOT / "docs/LIBRARY-REPLACEMENT.md", "LIBRARY-REPLACEMENT.md", "replacement guide", "Local library replacement guide"),
+        (ROOT / "packaging/licenses/LIBRARY-REPLACEMENT.md", "LIBRARY-REPLACEMENT.md", "replacement guide", "Local library replacement guide"),
     ):
         try:
             data = source_path.read_bytes()
