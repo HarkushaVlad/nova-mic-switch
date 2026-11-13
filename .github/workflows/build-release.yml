@@ -345,10 +345,15 @@ jobs:
 
           $RunKeyPath = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
           function Get-NovaMicSwitchRunValue {
-            $value = Get-ItemPropertyValue -LiteralPath $RunKeyPath -Name 'NovaMicSwitch' -ErrorAction SilentlyContinue
-            $properties = Get-ItemProperty -LiteralPath $RunKeyPath -Name 'NovaMicSwitch' -ErrorAction SilentlyContinue
-            $present = $null -ne $properties -and $properties.PSObject.Properties.Match('NovaMicSwitch').Count -gt 0
-            return @{ Present = $present; Value = $value }
+            try {
+              $properties = Get-ItemProperty -LiteralPath $RunKeyPath -ErrorAction Stop
+            }
+            catch [System.Management.Automation.ItemNotFoundException] {
+              return @{ Present = $false; Value = $null }
+            }
+            $property = $properties.PSObject.Properties['NovaMicSwitch']
+            if ($null -eq $property) { return @{ Present = $false; Value = $null } }
+            return @{ Present = $true; Value = $property.Value }
           }
           $RunValueBefore = Get-NovaMicSwitchRunValue
 

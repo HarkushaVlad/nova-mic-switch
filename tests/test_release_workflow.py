@@ -312,7 +312,9 @@ class ReleaseWorkflowTests(unittest.TestCase):
             "'/VERYSILENT'", "'/SUPPRESSMSGBOXES'", "'/NORESTART'", "'/SP-'", "'/NOICONS'",
             "'/TASKS=!startup'", "WaitForExit(30000)", "Stop-Process -Id $Process.Id -Force",
             "Silent installation requires explicit Microsoft runtime terms acceptance",
-            "Get-ItemPropertyValue -LiteralPath $RunKeyPath -Name 'NovaMicSwitch' -ErrorAction SilentlyContinue",
+            "Get-ItemProperty -LiteralPath $RunKeyPath -ErrorAction Stop",
+            "catch [System.Management.Automation.ItemNotFoundException]",
+            "$properties.PSObject.Properties['NovaMicSwitch']",
             "Get-NovaMicSwitchRunValue", "$InstallDirectoryCreated = Test-Path -LiteralPath $InstallDirectory",
             "windows-runtime", "TERMS.txt", "manifest.json", "installer-refusal.json",
             "explicit_acceptance_supplied = $false", "interactive_acceptance_tested = $false",
@@ -322,6 +324,8 @@ class ReleaseWorkflowTests(unittest.TestCase):
             self.assertIn(required, refusal_step)
         self.assertNotIn("/ACCEPTMICROSOFTRUNTIMETERMS", refusal_step)
         self.assertNotIn("$Process.WaitForExit()", refusal_step)
+        self.assertNotIn("Get-ItemPropertyValue", refusal_step)
+        self.assertNotIn("SilentlyContinue", refusal_step[refusal_step.index("function Get-NovaMicSwitchRunValue"):refusal_step.index("$RunValueBefore")])
         self.assertEqual(refusal_step.count("Get-NovaMicSwitchRunValue"), 3)
         for mutator in ("Set-ItemProperty", "New-ItemProperty", "Remove-ItemProperty", "reg add", "reg delete"):
             self.assertNotIn(mutator, refusal_step)
